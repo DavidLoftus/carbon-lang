@@ -6,6 +6,7 @@
 
 #include "common/check.h"
 #include "toolchain/language_server/handle.h"
+#include "toolchain/language_server/symbol.h"
 #include "toolchain/lex/token_index.h"
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/parse/node_ids.h"
@@ -13,29 +14,6 @@
 #include "toolchain/parse/tree_and_subtrees.h"
 
 namespace Carbon::LanguageServer {
-
-// Returns the token of first child of kind IdentifierNameBeforeParams or
-// IdentifierNameNotBeforeParams.
-static auto GetSymbolIdentifier(const Parse::TreeAndSubtrees& tree_and_subtrees,
-                                Parse::NodeId node)
-    -> std::optional<Lex::TokenIndex> {
-  const auto& tokens = tree_and_subtrees.tree().tokens();
-  for (auto child : tree_and_subtrees.children(node)) {
-    switch (tree_and_subtrees.tree().node_kind(child)) {
-      case Parse::NodeKind::IdentifierNameBeforeParams:
-      case Parse::NodeKind::IdentifierNameNotBeforeParams: {
-        auto token = tree_and_subtrees.tree().node_token(child);
-        if (tokens.GetKind(token) == Lex::TokenKind::Identifier) {
-          return token;
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return std::nullopt;
-}
 
 // Helper class to collect all symbols during traversal of AST.
 // Symbols are "open" when their signature has been declared but their body is
@@ -76,42 +54,6 @@ class SymbolStore {
   llvm::SmallVector<clang::clangd::DocumentSymbol> open_symbols_;
 };
 
-// Constructs a Range from a closed interval of tokens [start, end].
-static auto GetTokenRange(const Lex::TokenizedBuffer& tokens,
-                          Lex::TokenIndex start, Lex::TokenIndex end)
-    -> clang::clangd::Range {
-  auto start_line = tokens.GetLine(start);
-  auto start_col = tokens.GetColumnNumber(start);
-  auto [end_line, end_col] = tokens.GetEndLoc(end);
-
-  return clang::clangd::Range{
-      .start = {.line = start_line.index, .character = start_col - 1},
-      .end = {.line = end_line.index, .character = end_col - 1},
-  };
-}
-
-// Finds a spanning range for the provided definition / declaration ast node.
-// In the case of a definition start, will include the body as well.
-static auto GetSymbolRange(const Parse::TreeAndSubtrees& tree_and_subtrees,
-                           const Parse::NodeId& ast_node)
-    -> clang::clangd::Range {
-  const auto& tokens = tree_and_subtrees.tree().tokens();
-
-  // The left-most node will always be the first node in postorder traversal.
-  auto start_node = *tree_and_subtrees.postorder(ast_node).begin();
-
-  auto start_token = tree_and_subtrees.tree().node_token(start_node);
-  auto end_token = tree_and_subtrees.tree().node_token(ast_node);
-  if (tokens.GetKind(end_token).is_opening_symbol()) {
-    // DefinitionStart nodes use an opening token, so find its closing token to
-    // span the entire class/function body.
-    return GetTokenRange(tokens, start_token,
-                         tokens.GetMatchedClosingToken(end_token));
-  } else {
-    return GetTokenRange(tokens, start_token, end_token);
-  }
-}
-
 auto HandleDocumentSymbol(
     Context& context, const clang::clangd::DocumentSymbolParams& params,
     llvm::function_ref<
@@ -119,6 +61,9 @@ auto HandleDocumentSymbol(
         on_done) -> void {
   auto* file = context.LookupFile(params.textDocument.uri.file());
   if (!file) {
+    on_done(llvm::make_error<clang::clangd::LSPError>(
+        llvm::formatv("unknown file `{0}`", params.textDocument.uri.file()),
+        clang::clangd::ErrorCode::InvalidRequest));
     return;
   }
 
@@ -175,7 +120,7 @@ auto HandleDocumentSymbol(
           .name = std::string(tokens.GetTokenText(*identifier)),
           .kind = symbol_kind,
           .range = GetSymbolRange(tree_and_subtrees, node_id),
-          .selectionRange = GetTokenRange(tokens, *identifier, *identifier),
+          .selectionRange = GetSelectionRange(tokens, *identifier),
       };
 
       if (is_leaf) {

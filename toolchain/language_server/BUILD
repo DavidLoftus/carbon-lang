@@ -54,14 +54,18 @@ cc_library(
     hdrs = ["handle.h"],
     deps = [
         ":context",
+        ":symbol",
         "//common:check",
+        "//common:ostream",
         "//toolchain/base:shared_value_stores",
         "//toolchain/lex",
         "//toolchain/lex:token_index",
         "//toolchain/lex:token_kind",
+        "//toolchain/lex:tokenized_buffer",
         "//toolchain/parse",
         "//toolchain/parse:node_kind",
         "//toolchain/parse:tree",
+        "//toolchain/sem_ir:typed_insts",
         "//toolchain/source:source_buffer",
         "@llvm-project//clang-tools-extra/clangd:ClangDaemon",
     ],
@@ -86,6 +90,18 @@ cc_library(
     name = "outgoing_messages",
     hdrs = ["outgoing_messages.h"],
     deps = [
+        "@llvm-project//clang-tools-extra/clangd:ClangDaemon",
+    ],
+)
+
+cc_library(
+    name = "symbol",
+    srcs = ["symbol.cpp"],
+    hdrs = ["symbol.h"],
+    deps = [
+        "//toolchain/parse",
+        "//toolchain/parse:node_kind",
+        "//toolchain/parse:tree",
         "@llvm-project//clang-tools-extra/clangd:ClangDaemon",
     ],
 )

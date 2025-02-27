@@ -12,7 +12,8 @@ auto HandleInitialize(
     llvm::function_ref<auto(llvm::Expected<llvm::json::Object>)->void> on_done)
     -> void {
   llvm::json::Object capabilities{{"documentSymbolProvider", true},
-                                  {"textDocumentSync", /*Incremental=*/2}};
+                                  {"textDocumentSync", /*Incremental=*/2},
+                                  {"definitionProvider", true}};
   llvm::json::Object reply{{"capabilities", std::move(capabilities)}};
   on_done(reply);
 }

@@ -150,6 +150,10 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
     return GetTokenInfo(token).byte_offset();
   }
 
+  auto GetByteOffset(LineIndex line) const -> int32_t {
+    return GetLineInfo(line).start;
+  }
+
   // Returns true if the token comes after the comment.
   auto IsAfterComment(TokenIndex token, CommentIndex comment_index) const
       -> bool;

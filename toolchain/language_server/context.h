@@ -39,6 +39,8 @@ class Context {
       return *tree_and_subtrees_;
     }
 
+    auto sem_ir() const -> const SemIR::File& { return *sem_ir_; }
+
    private:
     // The filename, stable across instances.
     clang::clangd::URIForFile uri_;
@@ -49,6 +51,7 @@ class Context {
     std::unique_ptr<Lex::TokenizedBuffer> tokens_;
     std::unique_ptr<Parse::Tree> tree_;
     std::unique_ptr<Parse::TreeAndSubtrees> tree_and_subtrees_;
+    std::unique_ptr<SemIR::File> sem_ir_;
   };
 
   // `vlog_stream` is optional; other parameters are required.

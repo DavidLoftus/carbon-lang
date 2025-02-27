@@ -174,6 +174,8 @@ using AnyPointerDeferenceExprId =
 using AnyRuntimeBindingPatternName =
     NodeIdOneOf<IdentifierNameNotBeforeParamsId, SelfValueNameId,
                 UnderscoreNameId>;
+using AnyMemberAccessExprId =
+    NodeIdOneOf<MemberAccessExprId, PointerMemberAccessExprId>;
 
 // NodeId with kind that is anything but T::Kind.
 template <typename T>

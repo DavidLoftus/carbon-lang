@@ -135,8 +135,9 @@ auto Context::File::SetText(Context& context, std::optional<int64_t> version,
   tree_and_subtrees_ =
       std::make_unique<Parse::TreeAndSubtrees>(*tokens_, *tree_);
 
-  SemIR::File sem_ir(tree_.get(), SemIR::CheckIRId(0), tree_->packaging_decl(),
-                     *value_stores_, uri_.file().str());
+  sem_ir_ = std::make_unique<SemIR::File>(tree_.get(), SemIR::CheckIRId(0),
+                                          tree_->packaging_decl(),
+                                          *value_stores_, uri_.file().str());
   auto getter = [this]() -> const Parse::TreeAndSubtrees& {
     return *tree_and_subtrees_;
   };
@@ -145,7 +146,7 @@ auto Context::File::SetText(Context& context, std::optional<int64_t> version,
                                            .value_stores = value_stores_.get(),
                                            .timings = nullptr,
                                            .tree_and_subtrees_getter = getter,
-                                           .sem_ir = &sem_ir}};
+                                           .sem_ir = sem_ir_.get()}};
   llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> fs =
       new llvm::vfs::InMemoryFileSystem;
   // TODO: Include the prelude.

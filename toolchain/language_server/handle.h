@@ -46,6 +46,11 @@ auto HandleShutdown(
     llvm::function_ref<auto(llvm::Expected<std::nullptr_t>)->void> on_done)
     -> void;
 
+auto HandleGotoDefinition(
+    Context& context, const clang::clangd::TextDocumentPositionParams& params,
+    llvm::function_ref<auto(llvm::Expected<llvm::json::Value>)->void> on_done)
+    -> void;
+
 }  // namespace Carbon::LanguageServer
 
 #endif  // CARBON_TOOLCHAIN_LANGUAGE_SERVER_HANDLE_H_
