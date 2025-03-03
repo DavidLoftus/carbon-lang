@@ -146,6 +146,10 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
   // Returns the previous line handle.
   auto GetPrevLine(LineIndex line) const -> LineIndex;
 
+  auto GetLineLength(LineIndex line) const -> int32_t;
+
+  auto GetLineCount() const -> int32_t { return line_infos_.size(); }
+
   auto GetByteOffset(TokenIndex token) const -> int32_t {
     return GetTokenInfo(token).byte_offset();
   }

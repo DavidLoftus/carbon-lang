@@ -174,6 +174,14 @@ auto TokenizedBuffer::GetPrevLine(LineIndex line) const -> LineIndex {
   return LineIndex(line.index - 1);
 }
 
+auto TokenizedBuffer::GetLineLength(LineIndex line) const -> int32_t {
+  if (static_cast<size_t>(line.index) == line_infos_.size() - 1) {
+    return source_->text().size() - GetByteOffset(line);
+  }
+  auto next_line = GetNextLine(line);
+  return GetByteOffset(next_line) - GetByteOffset(line) - 1;
+}
+
 auto TokenizedBuffer::GetIndentColumnNumber(LineIndex line) const -> int {
   return GetLineInfo(line).indent + 1;
 }
