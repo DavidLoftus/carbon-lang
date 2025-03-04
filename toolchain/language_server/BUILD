@@ -63,6 +63,7 @@ cc_library(
         "//toolchain/lex:token_kind",
         "//toolchain/lex:tokenized_buffer",
         "//toolchain/parse",
+        "//toolchain/parse:node_category",
         "//toolchain/parse:node_kind",
         "//toolchain/parse:tree",
         "//toolchain/sem_ir:inst",

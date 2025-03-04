@@ -8,19 +8,35 @@
 // TIP: To dump output, run:
 // TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/language_server/testdata/goto_definition/prefix.carbon
 
+// --- prefix_amp.carbon
+var x: ();
+let y: ()* = &x;
+
+// --- if_expr.carbon
+var (x: (), y: (), z: ());
+fn Foo() {
+  let a: () = if x then y else z;
+}
+
 // --- STDIN
 [[@LSP-CALL:initialize]]
 [[@LSP-NOTIFY:textDocument/didOpen:
-  "textDocument": {"uri": "file:/prefix_amp.carbon", "languageId": "carbon",
-                   "text": "var x: ();\nlet y: ()* = &x;"}
+  "textDocument": {
+    "uri": "file:/prefix_amp.carbon",
+    "languageId": "carbon",
+    "text": "FROM_FILE_SPLIT"
+  }
 ]]
 [[@LSP-CALL:textDocument/definition:
   "textDocument": {"uri": "file:/prefix_amp.carbon"},
   "position": {"line": 1, "character": 14}
 ]]
 [[@LSP-NOTIFY:textDocument/didOpen:
-  "textDocument": {"uri": "file:/if_expr.carbon", "languageId": "carbon",
-                   "text": "var (x: (), y: (), z: ());\nfn Foo() {\n  let a: () = if x then y else z;\n}"}
+  "textDocument": {
+    "uri": "file:/if_expr.carbon",
+    "languageId": "carbon",
+    "text": "FROM_FILE_SPLIT"
+  }
 ]]
 [[@LSP-CALL:textDocument/definition:
   "textDocument": {"uri": "file:/if_expr.carbon"},

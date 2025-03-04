@@ -8,11 +8,21 @@
 // TIP: To dump output, run:
 // TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/language_server/testdata/goto_definition/basics.carbon
 
+// --- fn.carbon
+namespace Test;
+fn Test.Println() {}
+fn Main() {
+  Test.Println();
+}
+
 // --- STDIN
 [[@LSP-CALL:initialize]]
 [[@LSP-NOTIFY:textDocument/didOpen:
-  "textDocument": {"uri": "file:/fn.carbon", "languageId": "carbon",
-                   "text": "namespace Test;\nfn Test.Println() {}\nfn Main() {\n  Test.Println();\n}"}
+  "textDocument": {
+    "uri": "file:/fn.carbon",
+    "languageId": "carbon",
+    "text": "FROM_FILE_SPLIT"
+  }
 ]]
 [[@LSP-CALL:textDocument/definition:
   "textDocument": {"uri": "file:/fn.carbon"},
@@ -128,10 +138,25 @@
 // CHECK:STDOUT:     },
 // CHECK:STDOUT:     "uri": "file:///fn.carbon"
 // CHECK:STDOUT:   }
+// CHECK:STDOUT: }Content-Length: 143{{\r}}
+// CHECK:STDOUT: {{\r}}
+// CHECK:STDOUT: {
+// CHECK:STDOUT:   "jsonrpc": "2.0",
+// CHECK:STDOUT:   "method": "textDocument/publishDiagnostics",
+// CHECK:STDOUT:   "params": {
+// CHECK:STDOUT:     "diagnostics": [],
+// CHECK:STDOUT:     "uri": "file:///ptr.carbon"
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }Content-Length: 51{{\r}}
 // CHECK:STDOUT: {{\r}}
 // CHECK:STDOUT: {
 // CHECK:STDOUT:   "id": 6,
+// CHECK:STDOUT:   "jsonrpc": "2.0",
+// CHECK:STDOUT:   "result": null
+// CHECK:STDOUT: }Content-Length: 51{{\r}}
+// CHECK:STDOUT: {{\r}}
+// CHECK:STDOUT: {
+// CHECK:STDOUT:   "id": 7,
 // CHECK:STDOUT:   "jsonrpc": "2.0",
 // CHECK:STDOUT:   "result": null
 // CHECK:STDOUT: }

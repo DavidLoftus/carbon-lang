@@ -14,6 +14,7 @@
 #include "toolchain/lex/token_index.h"
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/lex/tokenized_buffer.h"
+#include "toolchain/parse/node_category.h"
 #include "toolchain/parse/node_ids.h"
 #include "toolchain/parse/node_kind.h"
 #include "toolchain/parse/tree.h"
@@ -106,7 +107,15 @@ static auto GetLeftMostToken(const Parse::TreeAndSubtrees& tree_and_subtrees,
   auto subtree_range = tree_and_subtrees.postorder(node);
   CARBON_CHECK(!subtree_range.empty());
   auto left_most_node = *subtree_range.begin();
-  return tree_and_subtrees.tree().node_token(left_most_node);
+
+  auto left_most_token = tree_and_subtrees.tree().node_token(left_most_node);
+  auto node_token = tree_and_subtrees.tree().node_token(node);
+
+  // In postfix + infix operators, left most token is always the left most node.
+  // In prefix operators, left most token is the token of the node itself,
+  // rather than checking the node kind, simply compare the indexes.
+  return left_most_token.index < node_token.index ? left_most_token
+                                                  : node_token;
 }
 
 // Given a range of sibling ast nodes and a token, find the node whose subtree
@@ -123,13 +132,15 @@ static auto FindChildWithToken(
   // first child where the left most node
   for (auto child : children) {
     auto min_token = GetLeftMostToken(tree_and_subtrees, child);
-    if (token.index >= min_token.index) {
+    if (min_token.index <= token.index) {
       return child;
     }
   }
   return Parse::NodeId::None;
 }
 
+// Given a token, finds the ast node that contains the token, returns both the
+// node and the path from root to the node.
 static auto FindSymbolNodeWithPath(
     const Parse::TreeAndSubtrees& tree_and_subtrees, Lex::TokenIndex token)
     -> std::optional<NodeWithPath> {
@@ -151,21 +162,30 @@ static auto FindSymbolNodeWithPath(
   }
 }
 
-// Tries to get the rhs of a MemberAccessExpr / PointerMemberAccessExpr.
-static auto TryGetMemberAccess(const Parse::TreeAndSubtrees& tree_and_subtrees,
-                               Parse::NodeId node) -> Parse::NodeId {
-  if (auto expr = tree_and_subtrees.ExtractAs<Parse::MemberAccessExpr>(node)) {
-    return expr->rhs;
+// Checks if node is a member name for parent MemberAccessExpr /
+// PointerMemberAccessExpr.
+static auto IsNamedMemberAccessExpr(
+    const Parse::TreeAndSubtrees& tree_and_subtrees, Parse::NodeId parent,
+    Parse::NodeId node) -> bool {
+  if (!tree_and_subtrees.tree().node_kind(node).category().HasAnyOf(
+          Parse::NodeCategory::MemberName)) {
+    return false;
+  }
+
+  if (auto expr =
+          tree_and_subtrees.ExtractAs<Parse::MemberAccessExpr>(parent)) {
+    return expr->rhs == node;
   }
   if (auto expr =
-          tree_and_subtrees.ExtractAs<Parse::PointerMemberAccessExpr>(node)) {
-    return expr->rhs;
+          tree_and_subtrees.ExtractAs<Parse::PointerMemberAccessExpr>(parent)) {
+    return expr->rhs == node;
   }
-  return Parse::NodeId::None;
+  return false;
 }
 
-// Not all AST nodes are pointed to by an Inst, ascend the tree and select
-// likely candidate.
+// Given a token for some symbol, find the AST node that best represents the
+// symbol. Will ascend the tree if the directly related AST node is insufficient
+// for scanning SemIR.
 static auto FindSymbolNode(const Parse::TreeAndSubtrees& tree_and_subtrees,
                            Lex::TokenIndex token) -> Parse::NodeId {
   auto node_with_path = FindSymbolNodeWithPath(tree_and_subtrees, token);
@@ -176,7 +196,7 @@ static auto FindSymbolNode(const Parse::TreeAndSubtrees& tree_and_subtrees,
   const auto& [node, path] = *node_with_path;
   if (!path.empty()) {
     auto parent_node = path.back();
-    if (TryGetMemberAccess(tree_and_subtrees, parent_node) == node) {
+    if (IsNamedMemberAccessExpr(tree_and_subtrees, parent_node, node)) {
       // node is the rhs of a MemberAccessExpr, parent_node should have an inst
       // that points to members definition.
       return parent_node;
@@ -185,11 +205,15 @@ static auto FindSymbolNode(const Parse::TreeAndSubtrees& tree_and_subtrees,
   return node;
 }
 
+// Given an ast node, finds the Inst that points to the node.
 static auto FindSymbolInst(const SemIR::File& sem_ir, Parse::NodeId node)
     -> SemIR::InstId {
   // TODO: use path to give hint of where to look.
   for (auto [i, inst] : llvm::enumerate(sem_ir.insts().array_ref())) {
     SemIR::InstId inst_id(i);
+    if (sem_ir.insts().Is<SemIR::Deref>(inst_id)) {
+      continue;
+    }
     if (auto loc = sem_ir.insts().GetLocId(inst_id);
         loc.is_node_id() && loc.node_id() == node) {
       return inst_id;
@@ -198,6 +222,8 @@ static auto FindSymbolInst(const SemIR::File& sem_ir, Parse::NodeId node)
   return SemIR::InstId::None;
 }
 
+// Given a byte_offset cursor position, finds the symbol that cursor is on, in
+// the form of its InstId.
 static auto LookupSymbol(const SemIR::File& sem_ir,
                          const Parse::TreeAndSubtrees& tree_and_subtrees,
                          int32_t byte_offset) -> SemIR::InstId {
@@ -210,10 +236,11 @@ static auto LookupSymbol(const SemIR::File& sem_ir,
   if (!node.has_value()) {
     return SemIR::InstId::None;
   }
-
   return FindSymbolInst(sem_ir, node);
 }
 
+// Given an InstId value, tries to resolve an the Inst for the symbols
+// definition.
 static auto FindSymbolDefinition(const SemIR::File& sem_ir,
                                  SemIR::InstId symbol) -> SemIR::InstId {
   if (auto name_ref = sem_ir.insts().TryGetAs<SemIR::NameRef>(symbol)) {
@@ -261,9 +288,7 @@ auto HandleGotoDefinition(
 
   auto inst = LookupSymbol(sem_ir, tree_and_subtrees, *byte_offset);
   if (!inst.has_value()) {
-    on_done(llvm::make_error<clang::clangd::LSPError>(
-        llvm::formatv("could not find symbol at offset {}", *byte_offset),
-        clang::clangd::ErrorCode::InternalError));
+    on_done(nullptr);
     return;
   }
 

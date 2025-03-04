@@ -8,11 +8,18 @@
 // TIP: To dump output, run:
 // TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/language_server/testdata/goto_definition/infix.carbon
 
+// --- infix.carbon
+var (var1: (), var2: (), var3: (), var4: ());
+let xyz: () = (var1 + var2) + (var3 + var4);
+
 // --- STDIN
 [[@LSP-CALL:initialize]]
 [[@LSP-NOTIFY:textDocument/didOpen:
-  "textDocument": {"uri": "file:/infix.carbon", "languageId": "carbon",
-                   "text": "var (var1: (), var2: (), var3: (), var4: ());\nlet xyz: () = (var1 + var2) + (var3 + var4);"}
+  "textDocument": {
+    "uri": "file:/infix.carbon",
+    "languageId": "carbon",
+    "text": "FROM_FILE_SPLIT"
+  }
 ]]
 [[@LSP-CALL:textDocument/definition:
   "textDocument": {"uri": "file:/infix.carbon"},
