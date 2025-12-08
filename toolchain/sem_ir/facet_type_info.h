@@ -95,6 +95,8 @@ struct FacetTypeInfo : Printable<FacetTypeInfo> {
 
   BuiltinConstraintMask builtin_constraint_mask = BuiltinConstraintMask::None;
 
+  llvm::SmallVector<TypeId> builtin_conversion_constraints;
+
   // TODO: Add same-type constraints.
   // TODO: Remove once all requirements are supported.
   bool other_requirements = false;
@@ -114,7 +116,8 @@ struct FacetTypeInfo : Printable<FacetTypeInfo> {
   auto TryAsSingleExtend() const -> std::optional<SingleExtendFacetType> {
     if (!self_impls_constraints.empty() ||
         !self_impls_named_constraints.empty() || !rewrite_constraints.empty() ||
-        !builtin_constraint_mask.empty() || other_requirements) {
+        !builtin_constraint_mask.empty() ||
+        !builtin_conversion_constraints.empty() || other_requirements) {
       return std::nullopt;
     }
     if (extend_constraints.size() == 1 && extend_named_constraints.empty()) {
@@ -135,6 +138,8 @@ struct FacetTypeInfo : Printable<FacetTypeInfo> {
                rhs.self_impls_named_constraints &&
            lhs.rewrite_constraints == rhs.rewrite_constraints &&
            lhs.builtin_constraint_mask == rhs.builtin_constraint_mask &&
+           lhs.builtin_conversion_constraints ==
+               rhs.builtin_conversion_constraints &&
            lhs.other_requirements == rhs.other_requirements;
   }
 };

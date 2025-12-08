@@ -14,6 +14,7 @@
 #include "toolchain/base/canonical_value_store.h"
 #include "toolchain/base/kind_switch.h"
 #include "toolchain/check/action.h"
+#include "toolchain/check/convert.h"
 #include "toolchain/check/diagnostic_helpers.h"
 #include "toolchain/check/eval_inst.h"
 #include "toolchain/check/facet_type.h"
@@ -1711,6 +1712,19 @@ static auto MakeConstantForBuiltinCall(EvalContext& eval_context,
           phase);
     }
 
+    case SemIR::BuiltinFunctionKind::TypeCanConvertTo: {
+      CARBON_CHECK(arg_ids.size() == 1);
+      auto target_type = context.types().GetTypeIdForTypeInstId(arg_ids[0]);
+      CARBON_CHECK(target_type != SemIR::TypeId::None);
+      auto id = eval_context.facet_types().Add(
+          {.builtin_conversion_constraints = {target_type}});
+      return MakeConstantResult(
+          eval_context.context(),
+          SemIR::FacetType{.type_id = SemIR::TypeType::TypeId,
+                           .facet_type_id = id},
+          phase);
+    }
+
     case SemIR::BuiltinFunctionKind::PrimitiveCopy: {
       return context.constant_values().Get(arg_ids[0]);
     }
@@ -1866,6 +1880,36 @@ static auto MakeConstantForBuiltinCall(EvalContext& eval_context,
               .type_id = SemIR::TypeType::TypeId,
               .inner_id = context.types().GetAsTypeInstId(arg_ids[0])},
           phase);
+    }
+
+    case SemIR::BuiltinFunctionKind::TypeConvert: {
+      if (phase != Phase::Concrete) {
+        break;
+      }
+
+      auto conversion_target = ConversionTarget{
+          .kind = ConversionTarget::Kind::Value,
+          .type_id = call.type_id,
+      };
+
+      llvm::errs() << "Performing conversion of "
+                   << context.insts().Get(arg_ids[0]) << " to "
+                   << context.types().GetAsInst(call.type_id) << "\n";
+
+      auto converted = PerformBuiltinConversion(context, loc_id, arg_ids[0],
+                                                conversion_target);
+      if (converted == arg_ids[0]) {
+        // If the conversion was an identity conversion, that's fine.
+        if (context.insts().Get(arg_ids[0]).type_id() == call.type_id) {
+          return MakeConstantResult(eval_context.context(),
+                                    context.insts().Get(converted), phase);
+        }
+        // Otherwise, the conversion failed.
+        return SemIR::ErrorInst::ConstantId;
+      }
+      CARBON_CHECK(converted != arg_ids[0]);
+      return MakeConstantResult(eval_context.context(),
+                                context.insts().Get(converted), phase);
     }
 
     // Character conversions.

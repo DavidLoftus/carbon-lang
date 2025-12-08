@@ -72,6 +72,16 @@ struct ConversionTarget {
   }
 };
 
+auto CanPerformBuiltinConversion(Context& context, SemIR::TypeId value_type_id,
+                                 ConversionTarget target,
+                                 SemIR::ClassType* vtable_class_type = nullptr)
+    -> bool;
+
+auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
+                              SemIR::InstId value_id, ConversionTarget target,
+                              SemIR::ClassType* vtable_class_type = nullptr)
+    -> SemIR::InstId;
+
 // Convert a value to another type and expression category.
 // TODO: The `vtable_id` parameter is too much of a special case here, and
 // should be removed - once partial classes are implemented, the vtable pointer

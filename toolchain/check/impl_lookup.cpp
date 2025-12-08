@@ -10,6 +10,7 @@
 #include <variant>
 
 #include "toolchain/base/kind_switch.h"
+#include "toolchain/check/convert.h"
 #include "toolchain/check/cpp/impl_lookup.h"
 #include "toolchain/check/deduce.h"
 #include "toolchain/check/diagnostic_helpers.h"
@@ -201,6 +202,7 @@ static auto FindAndDiagnoseImplLookupCycle(
 struct InterfacesFromConstantId {
   llvm::ArrayRef<SemIR::SpecificInterface> interfaces;
   SemIR::BuiltinConstraintMask builtin_constraint_mask;
+  llvm::ArrayRef<SemIR::TypeId> builtin_conversion_constraints;
   bool other_requirements;
 };
 
@@ -230,6 +232,8 @@ static auto GetInterfacesFromConstantId(
                              .Get(identified_id)
                              .required_interfaces(),
            .builtin_constraint_mask = facet_type_info.builtin_constraint_mask,
+           .builtin_conversion_constraints =
+               facet_type_info.builtin_conversion_constraints,
            .other_requirements = facet_type_info.other_requirements}};
 }
 
@@ -610,6 +614,30 @@ static auto TypeCanDestroy(Context& context,
   }
 }
 
+// Returns true if the `Self` has builtin conversions.
+static auto TypeCanBuiltinConvertTo(Context& context, SemIR::ConstantId from,
+                                    SemIR::TypeId to) -> bool {
+  auto inst = context.insts().Get(context.constant_values().GetInstId(
+      GetCanonicalFacetOrTypeValue(context, from)));
+
+  // For facet values, look if the FacetType provides the same.
+  if (auto facet_type =
+          context.types().TryGetAs<SemIR::FacetType>(inst.type_id())) {
+    const auto& info = context.facet_types().Get(facet_type->facet_type_id);
+    if (llvm::find(info.builtin_conversion_constraints, to) !=
+        info.builtin_conversion_constraints.end()) {
+      return true;
+    }
+  }
+
+  auto type = context.types().GetAsTypeInstId(
+      context.constant_values().GetInstId(from));
+
+  return CanPerformBuiltinConversion(
+      context, context.types().GetTypeIdForTypeInstId(type),
+      {.kind = ConversionTarget::Value, .type_id = to});
+}
+
 auto LookupImplWitness(Context& context, SemIR::LocId loc_id,
                        SemIR::ConstantId query_self_const_id,
                        SemIR::ConstantId query_facet_type_const_id)
@@ -637,8 +665,8 @@ auto LookupImplWitness(Context& context, SemIR::LocId loc_id,
   if (!interfaces_from_constant_id) {
     return SemIR::InstBlockIdOrError::MakeError();
   }
-  auto [interfaces, builtin_constraint_mask, other_requirements] =
-      *interfaces_from_constant_id;
+  auto [interfaces, builtin_constraint_mask, builtin_conversion_constraints,
+        other_requirements] = *interfaces_from_constant_id;
   if (other_requirements) {
     // TODO: Remove this when other requirements go away.
     return SemIR::InstBlockId::None;
@@ -646,6 +674,12 @@ auto LookupImplWitness(Context& context, SemIR::LocId loc_id,
   if (builtin_constraint_mask.HasAnyOf(
           SemIR::BuiltinConstraintMask::TypeCanDestroy) &&
       !TypeCanDestroy(context, query_self_const_id)) {
+    return SemIR::InstBlockId::None;
+  }
+  if (llvm::any_of(builtin_conversion_constraints, [&](auto constraint) {
+        return !TypeCanBuiltinConvertTo(context, query_self_const_id,
+                                        constraint);
+      })) {
     return SemIR::InstBlockId::None;
   }
   if (interfaces.empty()) {

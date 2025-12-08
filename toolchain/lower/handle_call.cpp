@@ -485,7 +485,8 @@ static auto HandleBuiltinCall(FunctionContext& context, SemIR::InstId inst_id,
     case SemIR::BuiltinFunctionKind::CharConvertChecked:
     case SemIR::BuiltinFunctionKind::FloatConvertChecked:
     case SemIR::BuiltinFunctionKind::IntConvertChecked:
-    case SemIR::BuiltinFunctionKind::TypeCanDestroy: {
+    case SemIR::BuiltinFunctionKind::TypeCanDestroy:
+    case SemIR::BuiltinFunctionKind::TypeCanConvertTo: {
       // TODO: Check this statically.
       CARBON_CHECK(builtin_kind.IsCompTimeOnly(
           context.sem_ir(), arg_ids,
@@ -509,6 +510,10 @@ static auto HandleBuiltinCall(FunctionContext& context, SemIR::InstId inst_id,
 
     case SemIR::BuiltinFunctionKind::TypeDestroy:
       // TODO: Destroy aggregate members.
+      return;
+
+    case SemIR::BuiltinFunctionKind::TypeConvert:
+      // TODO: Handle runtime lowering of "type.convert"
       return;
   }
 

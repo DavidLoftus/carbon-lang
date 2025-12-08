@@ -316,6 +316,8 @@ static auto ValidateSignature(const File& sem_ir,
 
   // Must have expected number of arguments.
   if (call_params.size() != SignatureTraits::num_args) {
+    llvm::errs() << "Expected " << SignatureTraits::num_args << " arguments, "
+                 << "but got " << call_params.size() << " arguments.\n";
     return false;
   }
 
@@ -325,12 +327,14 @@ static auto ValidateSignature(const File& sem_ir,
                     sem_ir, state, call_params[Indexes])) &&
                 ...);
       }(std::make_index_sequence<SignatureTraits::num_args>())) {
+    llvm::errs() << "Argument types do not match expected types.\n";
     return false;
   }
 
   // Result type must match.
   if (!CheckType<typename SignatureTraits::result_t>(sem_ir, state,
                                                      return_type)) {
+    llvm::errs() << "Result type does not match expected type.\n";
     return false;
   }
 
@@ -732,6 +736,12 @@ constexpr BuiltinInfo TypeDestroy = {
 // `type.destroy`.
 constexpr BuiltinInfo TypeCanDestroy = {"type.can_destroy",
                                         ValidateSignature<auto()->Type>};
+
+constexpr BuiltinInfo TypeConvert = {"type.convert",
+                                     ValidateSignature<auto(AnyType)->AnyType>};
+
+constexpr BuiltinInfo TypeCanConvertTo = {"type.can_builtin_convert_to",
+                                          ValidateSignature<auto(Type)->Type>};
 
 }  // namespace BuiltinFunctionInfo
 

@@ -523,4 +523,142 @@ auto CheckParseTrees(
   MaybeDumpCppAST(units, options);
 }
 
+// // Handles printing of formatted SemIR.
+// static auto MaybeDumpFormattedSemIR(
+//     const SemIR::File& sem_ir, int total_ir_count,
+//     Parse::GetTreeAndSubtreesFn tree_and_subtrees_getter, bool
+//     include_in_dumps, const CheckParseTreeOptions& options) -> void {
+//   bool dump = options.dump_stream && include_in_dumps;
+//   if (!options.vlog_stream && !dump) {
+//     return;
+//   }
+
+//   const auto& tokens = sem_ir.parse_tree().tokens();
+//   if (options.dump_sem_ir_ranges ==
+//           CheckParseTreeOptions::DumpSemIRRanges::Only &&
+//       !tokens.has_dump_sem_ir_ranges() && !tokens.has_include_in_dumps()) {
+//     return;
+//   }
+
+//   bool use_dump_sem_ir_ranges =
+//       options.dump_sem_ir_ranges !=
+//           CheckParseTreeOptions::DumpSemIRRanges::Ignore &&
+//       tokens.has_dump_sem_ir_ranges();
+//   SemIR::Formatter formatter(&sem_ir, total_ir_count,
+//   tree_and_subtrees_getter,
+//                              options.include_in_dumps,
+//                              use_dump_sem_ir_ranges);
+//   formatter.Format();
+//   if (options.vlog_stream) {
+//     CARBON_VLOG_TO(options.vlog_stream, "*** SemIR::File ***\n");
+//     formatter.Write(*options.vlog_stream);
+//   }
+//   if (dump) {
+//     formatter.Write(*options.dump_stream);
+//   }
+// }
+
+// // Handles options for dumping SemIR, including verbose output.
+// static auto MaybeDumpSemIR(SemIR::File& sem_ir,
+//                            Parse::GetTreeAndSubtreesFn get_tree_and_subtrees,
+//                            const CheckParseTreeOptions& options) -> void {
+//   if (!options.vlog_stream && !options.dump_stream &&
+//       !options.raw_dump_stream) {
+//     return;
+//   }
+
+//   // Flush diagnostics before printing.
+//   options.consumer->Flush();
+
+//   bool include_in_dumps =
+//   options.include_in_dumps->Get(sem_ir.check_ir_id()); if (include_in_dumps
+//   && options.raw_dump_stream) {
+//     sem_ir.Print(*options.raw_dump_stream, options.dump_raw_sem_ir_builtins);
+//   }
+
+//   MaybeDumpFormattedSemIR(sem_ir, 1, get_tree_and_subtrees, include_in_dumps,
+//                           options);
+// }
+
+// // Handles options for dumping C++ AST.
+// static auto MaybeDumpCppAST(clang::ASTUnit* clang_ast_unit,
+//                             const CheckParseTreeOptions& options) -> void {
+//   if (!options.dump_cpp_ast_stream) {
+//     return;
+//   }
+
+//   if (!clang_ast_unit) {
+//     return;
+//   }
+//   clang::ASTContext& ast_context = clang_ast_unit->getASTContext();
+//   ast_context.getTranslationUnitDecl()->dump(*options.dump_cpp_ast_stream);
+// }
+
+// auto TrackImports(UnitAndImports& unit_info, const ImportDB& import_db,
+//                   const CheckParseTreeOptions& options) -> void {
+//   auto [package_imports, imports_map] =
+//   import_db.GetImports(unit_info.unit->sem_ir->check_ir_id());
+//   unit_info.package_imports = package_imports;
+//   unit_info.package_imports_map = imports_map;
+
+//   const auto& packaging = unit_info.parse_tree().packaging_decl();
+//   if (packaging && packaging->is_impl) {
+//     // An `impl` has an implicit import of its `api`.
+//     auto implicit_names = packaging->names;
+//     implicit_names.package_id = PackageNameId::None;
+//     TrackImport(import_db, nullptr, unit_info, implicit_names,
+//     options.fuzzing);
+//   }
+
+//   Map<ImportKey, Parse::NodeId> explicit_import_map;
+
+//   // Add the prelude import. It's added to explicit_import_map so that it can
+//   // conflict with an explicit import of the prelude.
+//   if (options.prelude_import &&
+//       !(packaging && packaging->names.package_id == PackageNameId::Core)) {
+//     auto prelude_id =
+//         unit_info.unit->value_stores->string_literal_values().Add("prelude");
+//     TrackImport(import_db, &explicit_import_map, unit_info,
+//                 {.node_id = Parse::NoneNodeId(),
+//                  .package_id = PackageNameId::Core,
+//                  .library_id = prelude_id},
+//                 options.fuzzing);
+//   }
+
+//   for (const auto& import : unit_info.parse_tree().imports()) {
+//     TrackImport(import_db, &explicit_import_map, unit_info, import,
+//                 options.fuzzing);
+//   }
+// }
+
+// auto CheckParseTree(
+//     SemIR::File& sem_ir,
+//     const Parse::GetTreeAndSubtreesStore& tree_and_subtrees_getters,
+//     std::unique_ptr<clang::ASTUnit>& clang_ast_unit, const ImportDB&
+//     import_db, llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs, const
+//     CheckParseTreeOptions& options,
+//     std::shared_ptr<clang::CompilerInvocation> clang_invocation) -> void {
+//   Unit unit = {
+//       .consumer = options.consumer,
+//       .value_stores = options.value_stores,
+//       .timings = options.timings,
+//       .sem_ir = &sem_ir,
+//       .total_ir_count = options.total_ir_count,
+//       .clang_ast_unit = &clang_ast_unit,
+//   };
+
+//   auto get_tree_and_subtrees_fn =
+//       tree_and_subtrees_getters.Get(sem_ir.check_ir_id());
+
+//   UnitAndImports unit_info(&unit, get_tree_and_subtrees_fn);
+//   TrackImports(unit_info, import_db);
+
+//   CheckUnit(&unit_info, &tree_and_subtrees_getters, fs, clang_invocation,
+//             options.vlog_stream)
+//       .Run();
+
+//   MaybeDumpSemIR(sem_ir, get_tree_and_subtrees_fn, options);
+//   MaybeDumpCppAST(clang_ast_unit.get(), options);
+// }
+
 }  // namespace Carbon::Check

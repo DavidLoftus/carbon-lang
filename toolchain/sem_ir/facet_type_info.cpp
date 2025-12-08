@@ -57,6 +57,11 @@ static auto RequiredLess(const IdentifiedFacetType::RequiredInterface& lhs,
          std::tie(rhs.interface_id.index, rhs.specific_id.index);
 }
 
+static auto BuiltinConversionLess(const TypeId& lhs, const TypeId& rhs)
+    -> bool {
+  return lhs.index < rhs.index;
+}
+
 // Assuming both `a` and `b` are sorted and deduplicated, replaces `a` with `a -
 // b` as sets. Assumes there are few elements between them.
 template <typename VecT>
@@ -136,6 +141,9 @@ auto FacetTypeInfo::Combine(const FacetTypeInfo& lhs, const FacetTypeInfo& rhs)
                  rhs.rewrite_constraints);
   info.builtin_constraint_mask =
       lhs.builtin_constraint_mask | rhs.builtin_constraint_mask;
+  CombineVectors(info.builtin_conversion_constraints,
+                 lhs.builtin_conversion_constraints,
+                 rhs.builtin_conversion_constraints);
   info.other_requirements = lhs.other_requirements || rhs.other_requirements;
   return info;
 }
@@ -149,6 +157,7 @@ auto FacetTypeInfo::Canonicalize() -> void {
   SubtractSorted(self_impls_named_constraints, extend_named_constraints,
                  NamedConstraintsLess);
   SortAndDeduplicate(rewrite_constraints, RewriteLess);
+  SortAndDeduplicate(builtin_conversion_constraints, BuiltinConversionLess);
 }
 
 auto FacetTypeInfo::Print(llvm::raw_ostream& out) const -> void {
@@ -209,6 +218,14 @@ auto FacetTypeInfo::Print(llvm::raw_ostream& out) const -> void {
 
   if (!builtin_constraint_mask.empty()) {
     out << outer_sep << "builtin_constraint_mask: " << builtin_constraint_mask;
+  }
+
+  if (!builtin_conversion_constraints.empty()) {
+    out << outer_sep << "builtin_conversion_constraints: ";
+    llvm::ListSeparator sep;
+    for (auto conv : builtin_conversion_constraints) {
+      out << sep << conv;
+    }
   }
 
   if (other_requirements) {
