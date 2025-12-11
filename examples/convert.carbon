@@ -12,37 +12,21 @@ impl forall [T:! type, U:! CanBuiltinConvertTo(T)] T as Core.ImplicitAs(U) {
 
 //@dump-sem-ir-begin
 
-fn ForceConvert(T:! type, value: T) {}
+class C { var a: i32; }
 
-fn Convert(T:! Core.Destroy, U:! Core.ImplicitAs(T), value: U) {
-    ForceConvert(T, value);
+fn MakeC(x: {.a: i32}) -> C {
+    // Expands to:
+    return x;
 }
 
-interface I {
-  require Self impls Core.Destroy;
-  let X:! type;
-}
-
-fn PrintArray(a: array(i32, 2)) {
-    if (a[0] == 0) {
-        Core.Print('0');
-    } else {
-        Core.Print('1');
-    }
-
-    if (a[1] == 1) {
-        Core.Print('1');
-    } else {
-        Core.Print('0');
-    }
-}
-
-fn F[T:! Core.ImplicitAs(array(i32, 2))](i: T) {
-    PrintArray(i);
+fn GenericMakeC[T:! Core.ImplicitAs(C)](x: T) -> C {
+    // Expands to x.(Core.ImplicitAs(C).As)()
+    return x;
 }
 
 fn Run() -> i32 {
-    F((0, 1));
+    MakeC({.a = 0});
+    GenericMakeC({.a = 0});
     return 0;
 }
 
