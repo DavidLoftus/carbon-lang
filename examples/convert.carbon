@@ -2,32 +2,33 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+//@include-in-dumps
+
 import Core library "io";
 
-private fn CanBuiltinConvertTo(T: type) -> type = "type.can_builtin_convert_to";
-
-impl forall [T:! type, U:! CanBuiltinConvertTo(T)] T as Core.ImplicitAs(U) {
-    fn Convert[self: Self]() -> U = "type.convert";
+class A {
+  var i: i32;
 }
+class B {
+  var i: i32;
+}
+
 
 //@dump-sem-ir-begin
-
-class C { var a: i32; }
-
-fn MakeC(x: {.a: i32}) -> C {
-    // Expands to:
-    return x;
+impl A as Core.ImplicitAs(B) {
+  fn Convert[self: Self]() -> B {
+    return {.i = self.i + 1};
+  }
 }
-
-fn GenericMakeC[T:! Core.ImplicitAs(C)](x: T) -> C {
-    // Expands to x.(Core.ImplicitAs(C).As)()
-    return x;
+fn MyConvert(a: (A,A)) -> (B,B) {
+  return a;
 }
+//@dump-sem-ir-end
+
 
 fn Run() -> i32 {
-    MakeC({.a = 0});
-    GenericMakeC({.a = 0});
-    return 0;
+  let b: (B,B) = MyConvert(({.i = 0},{.i = 2}));
+  Core.Print(b.0.i);
+  Core.Print(b.1.i);
+  return 0;
 }
-
-//@dump-sem-ir-end

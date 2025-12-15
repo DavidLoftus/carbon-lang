@@ -16,18 +16,23 @@
 #include "toolchain/check/diagnostic_helpers.h"
 #include "toolchain/check/eval.h"
 #include "toolchain/check/facet_type.h"
+#include "toolchain/check/function.h"
 #include "toolchain/check/generic.h"
 #include "toolchain/check/impl.h"
 #include "toolchain/check/import_ref.h"
 #include "toolchain/check/inst.h"
+#include "toolchain/check/pattern.h"
+#include "toolchain/check/pattern_match.h"
 #include "toolchain/check/subst.h"
 #include "toolchain/check/type.h"
 #include "toolchain/check/type_completion.h"
 #include "toolchain/check/type_structure.h"
 #include "toolchain/sem_ir/facet_type_info.h"
+#include "toolchain/sem_ir/function.h"
 #include "toolchain/sem_ir/ids.h"
 #include "toolchain/sem_ir/impl.h"
 #include "toolchain/sem_ir/inst.h"
+#include "toolchain/sem_ir/type_info.h"
 #include "toolchain/sem_ir/typed_insts.h"
 
 namespace Carbon::Check {
@@ -385,6 +390,264 @@ static auto LookupImplWitnessInSelfFacetValue(
   return EvalImplLookupResult::MakeNonFinal();
 }
 
+// Builds a witness that the given type implements the given interface,
+// populating it with the specified set of values. Returns a corresponding
+// lookup result. Produces a diagnostic and returns `None` if the specified
+// values aren't suitable for the interface.
+static auto BuildWitness(Context& context, SemIR::LocId loc_id,
+                         SemIR::SpecificInterface specific_interface,
+                         llvm::ArrayRef<SemIR::InstId> values)
+    -> SemIR::InstId {
+  const auto& interface =
+      context.interfaces().Get(specific_interface.interface_id);
+  auto assoc_entities =
+      context.inst_blocks().GetOrEmpty(interface.associated_entities_id);
+  if (assoc_entities.size() != values.size()) {
+    context.TODO(loc_id, ("Unsupported definition of interface " +
+                          context.names().GetFormatted(interface.name_id))
+                             .str());
+    return SemIR::ErrorInst::InstId;
+  }
+
+  // Build a witness with the current contents of the witness table. This will
+  // grow as we progress through the impl. In theory this will build O(n^2)
+  // table entries, but in practice n <= 2, so that's OK.
+  //
+  // This is necessary because later associated entities may refer to earlier
+  // associated entities in their signatures. In particular, an associated
+  // result type may be used as the return type of an associated function.
+  //
+  // TODO: Consider building one witness after all associated constants, and
+  // then a second after all associated functions, rather than building one at
+  // each step. For now this doesn't really matter since we don't have more than
+  // one of each anyway.
+  return context.constant_values().GetInstId(EvalOrAddInst<SemIR::CppWitness>(
+      context, loc_id,
+      {.type_id = GetSingletonType(context, SemIR::WitnessType::TypeInstId),
+       .elements_id = context.inst_blocks().Add(values)}));
+}
+
+// static auto BuildSingleFunctionWitness(
+//     Context& context, SemIR::LocId loc_id, clang::FunctionDecl* cpp_fn,
+//     clang::DeclAccessPair found_decl, int num_params,
+//     SemIR::TypeId self_type_id, SemIR::SpecificInterface specific_interface)
+//     -> SemIR::InstId {
+//   auto fn_id = context.clang_sema().DiagnoseUseOfOverloadedDecl(
+//                    cpp_fn, GetCppLocation(context, loc_id))
+//                    ? SemIR::ErrorInst::InstId
+//                    : ImportCppFunctionDecl(context, loc_id, cpp_fn,
+//                    num_params);
+//   if (auto fn_decl =
+//           context.insts().TryGetAsWithId<SemIR::FunctionDecl>(fn_id)) {
+//     CheckCppOverloadAccess(context, loc_id, found_decl, fn_decl->inst_id);
+//   } else {
+//     CARBON_CHECK(fn_id == SemIR::ErrorInst::InstId);
+//     return SemIR::ErrorInst::InstId;
+//   }
+//   return BuildWitness(context, loc_id, self_type_id, specific_interface,
+//                       {fn_id});
+// }
+
+static auto TrySynthesizeImplicitAs(
+    Context& context, SemIR::LocId loc_id,
+    SemIR::ConstantId query_self_const_id,
+    const SemIR::SpecificInterface query_specific_interface) -> SemIR::InstId {
+  // if (loc_id.has_value()) {
+  //   return SemIR::InstId::None;
+  // }
+  // 1. Check if the interface is `Core.ImplicitAs`.
+  // We check the name first as a quick filter.
+  // TODO: Verify strictly against Core.ImplicitAs.
+  auto& interface =
+      context.interfaces().Get(query_specific_interface.interface_id);
+  if (!context.name_scopes().IsCorePackage(interface.parent_scope_id)) {
+    return SemIR::InstId::None;
+  }
+  if (!interface.name_id.AsIdentifierId().has_value()) {
+    return SemIR::InstId::None;
+  }
+
+  if (context.identifiers().Get(interface.name_id.AsIdentifierId()) !=
+      "ImplicitAs") {
+    return SemIR::InstId::None;
+  }
+
+  auto source_type_id =
+      context.types().GetTypeIdForTypeConstantId(query_self_const_id);
+
+  // ImplicitAs has 1 constant argument: `Dest`.
+  auto args = context.inst_blocks().GetOrEmpty(
+      context.specifics().GetArgsOrEmpty(query_specific_interface.specific_id));
+  CARBON_CHECK(args.size() == 1);
+  auto dest_type_id = context.types().GetTypeIdForTypeInstId(args[0]);
+
+  // Create the synthesized function `Convert`.
+  // TODO: Add proper name "Convert"?
+
+  RequireCompleteType(context, dest_type_id, loc_id, [&] {
+    CARBON_DIAGNOSTIC(
+        IncompleteTypeInSynthesizedFunction, Error,
+        "parameter has incomplete type {0} in function definition",
+        TypeOfInstId);
+    return context.emitter().Build(loc_id, IncompleteTypeInSynthesizedFunction,
+                                   context.types().GetInstId(dest_type_id));
+  });
+
+  auto self_bind_name_id = context.entity_names().AddSymbolicBindingName(
+      SemIR::NameId::SelfValue, SemIR::NameScopeId::None,
+      SemIR::CompileTimeBindIndex::None,
+      /*is_template=*/false);
+
+  auto pattern_type_id = GetPatternType(context, source_type_id);
+
+  context.pattern_block_stack().Push();
+
+  auto self_binding_pattern_id = AddPatternInst(
+      context, SemIR::LocIdAndInst::NoLoc(SemIR::AnyBindingPattern{
+                   .kind = SemIR::ValueBindingPattern::Kind,
+                   .type_id = pattern_type_id,
+                   .entity_name_id = self_bind_name_id}));
+
+  auto self_pattern_id = AddPatternInst(
+      context, SemIR::LocIdAndInst::NoLoc(SemIR::ValueParamPattern{
+                   .type_id = pattern_type_id,
+                   .subpattern_id = self_binding_pattern_id,
+                   .index = SemIR::CallParamIndex(0),
+               }));
+
+  auto return_type_info =
+      SemIR::ReturnTypeInfo::ForType(context.sem_ir(), dest_type_id);
+  CARBON_CHECK(return_type_info.is_valid(),
+               "Invalid return type info: {} has ValueRepr {}",
+               context.types().GetAsInst(dest_type_id),
+               context.types().GetValueRepr(dest_type_id));
+
+  SemIR::InstBlockId return_patterns_id = SemIR::InstBlockId::Empty;
+  if (return_type_info.has_return_slot()) {
+    auto pattern_type_id = GetPatternType(context, dest_type_id);
+
+    auto return_pattern_id = AddPatternInst(
+        context, SemIR::LocIdAndInst::NoLoc(SemIR::ReturnSlotPattern{
+                     .type_id = pattern_type_id,
+                     .type_inst_id = context.types().GetInstId(dest_type_id),
+                 }));
+
+    auto out_param_pattern_id = AddPatternInst(
+        context, SemIR::LocIdAndInst::NoLoc(SemIR::OutParamPattern{
+                     .type_id = pattern_type_id,
+                     .subpattern_id = return_pattern_id,
+                     .index = SemIR::CallParamIndex(1),
+                 }));
+
+    return_patterns_id = context.inst_blocks().Add({out_param_pattern_id});
+  }
+
+  auto pattern_block_id = context.pattern_block_stack().Pop();
+
+  context.inst_block_stack().Push();
+
+  auto self_param_id = AddInst(context, loc_id,
+                               SemIR::ValueParam{
+                                   .type_id = source_type_id,
+                                   .index = SemIR::CallParamIndex(0),
+                                   .pretty_name_id = SemIR::NameId::SelfValue,
+                               });
+
+  auto out_param_id = AddInst(context, loc_id,
+                              SemIR::OutParam{
+                                  .type_id = dest_type_id,
+                                  .index = SemIR::CallParamIndex(1),
+                                  .pretty_name_id = SemIR::NameId::ReturnSlot,
+                              });
+
+  auto decl_block_id = context.inst_block_stack().Pop();
+
+  auto call_params_id =
+      context.inst_blocks().Add({self_param_id, out_param_id});
+
+  context.inst_block_stack().Push();
+
+  auto return_slot_id =
+      AddInst(context, loc_id,
+              SemIR::ReturnSlot{
+                  .type_id = dest_type_id,
+                  .type_inst_id = context.types().GetInstId(dest_type_id),
+                  .storage_id = out_param_id,
+              });
+
+  // Re-setup target for generation (diagnose=true is fine now).
+  ConversionTarget target = {
+      .kind = ConversionTarget::Value,
+      .type_id = dest_type_id,
+      .diagnose = true,
+  };
+
+  // Perform conversion.
+  // Note: PerformBuiltinConversion adds to current block.
+  auto converted_id =
+      PerformBuiltinConversion(context, loc_id, self_param_id, target);
+
+  // Return the result.
+  AddInst(context, loc_id,
+          SemIR::ReturnExpr{
+              .expr_id = converted_id,
+              .dest_id = return_slot_id,
+          });
+
+  auto body_block_id = context.inst_block_stack().Pop();
+
+  auto function_id = context.functions().Add(SemIR::Function{
+      {
+          .name_id = SemIR::NameId::ForIdentifier(
+              context.identifiers().Add("Convert.thunk")),
+          .parent_scope_id = SemIR::NameScopeId::Package,
+          .generic_id = SemIR::GenericId::None,
+          .first_param_node_id = Parse::NodeId::None,
+          .last_param_node_id = Parse::NodeId::None,
+          .pattern_block_id = pattern_block_id,
+          .implicit_param_patterns_id =
+              context.inst_blocks().Add({self_pattern_id}),
+          .param_patterns_id = SemIR::InstBlockId::Empty,
+          .is_extern = false,
+          .extern_library_id = SemIR::LibraryNameId::None,
+          .non_owning_decl_id = SemIR::InstId::None,
+          .first_owning_decl_id = SemIR::InstId::None,
+          .definition_id = SemIR::InstId::None,
+      },
+      {
+          .call_params_id = SemIR::InstBlockId::Empty,
+          .return_type_inst_id = context.types().GetInstId(dest_type_id),
+          .return_patterns_id = return_patterns_id,
+          .special_function_kind =
+              SemIR::FunctionFields::SpecialFunctionKind::None,
+          .self_param_id = self_pattern_id,
+      },
+  });
+
+  auto func_type_id =
+      AddInst(context, SemIR::LocIdAndInst::NoLoc(SemIR::FunctionType{
+                           .type_id = SemIR::TypeType::TypeId,
+                           .function_id = function_id,
+                           .specific_id = SemIR::SpecificId::None,
+                       }));
+
+  auto func_decl_id = AddInst(
+      context,
+      SemIR::LocIdAndInst::NoLoc(SemIR::FunctionDecl{
+          .type_id = context.types().GetTypeIdForTypeInstId(func_type_id),
+          .function_id = function_id,
+          .decl_block_id = decl_block_id,
+      }));
+
+  auto& func = context.functions().Get(function_id);
+  func.first_owning_decl_id = func_decl_id;
+  func.call_params_id = call_params_id;
+  func.body_block_ids = {body_block_id};
+
+  return BuildWitness(context, loc_id, query_specific_interface,
+                      {func_decl_id});
+}
+
 // Substitutes witnesess in place of `LookupImplWitness` queries into `.Self`,
 // when the witness is for the same interface as the one `.Self` is referring
 // to.
@@ -614,30 +877,6 @@ static auto TypeCanDestroy(Context& context,
   }
 }
 
-// Returns true if the `Self` has builtin conversions.
-static auto TypeCanBuiltinConvertTo(Context& context, SemIR::ConstantId from,
-                                    SemIR::TypeId to) -> bool {
-  auto inst = context.insts().Get(context.constant_values().GetInstId(
-      GetCanonicalFacetOrTypeValue(context, from)));
-
-  // For facet values, look if the FacetType provides the same.
-  if (auto facet_type =
-          context.types().TryGetAs<SemIR::FacetType>(inst.type_id())) {
-    const auto& info = context.facet_types().Get(facet_type->facet_type_id);
-    if (llvm::find(info.builtin_conversion_constraints, to) !=
-        info.builtin_conversion_constraints.end()) {
-      return true;
-    }
-  }
-
-  auto type = context.types().GetAsTypeInstId(
-      context.constant_values().GetInstId(from));
-
-  return CanPerformBuiltinConversion(
-      context, context.types().GetTypeIdForTypeInstId(type),
-      {.kind = ConversionTarget::Value, .type_id = to});
-}
-
 auto LookupImplWitness(Context& context, SemIR::LocId loc_id,
                        SemIR::ConstantId query_self_const_id,
                        SemIR::ConstantId query_facet_type_const_id)
@@ -674,12 +913,6 @@ auto LookupImplWitness(Context& context, SemIR::LocId loc_id,
   if (builtin_constraint_mask.HasAnyOf(
           SemIR::BuiltinConstraintMask::TypeCanDestroy) &&
       !TypeCanDestroy(context, query_self_const_id)) {
-    return SemIR::InstBlockId::None;
-  }
-  if (llvm::any_of(builtin_conversion_constraints, [&](auto constraint) {
-        return !TypeCanBuiltinConvertTo(context, query_self_const_id,
-                                        constraint);
-      })) {
     return SemIR::InstBlockId::None;
   }
   if (interfaces.empty()) {
@@ -1003,6 +1236,7 @@ auto EvalLookupSingleImplWitness(Context& context, SemIR::LocId loc_id,
           ? Concrete
       : facet_lookup_result.has_value() ? FoundInFacet
                                         : Symbolic;
+  // TODO: Investigate why this check fails for sieve.carbon.
   CARBON_CHECK(kind != Concrete || !facet_lookup_result.has_value(),
                "Non-concrete facet lookup value for concrete query");
 
@@ -1120,6 +1354,20 @@ auto EvalLookupSingleImplWitness(Context& context, SemIR::LocId loc_id,
           return EvalImplLookupResult::MakeFinal(cpp_witness_id);
         }
       }
+
+      {
+        // Attempt to synthesize an ImplicitAs impl.
+        auto witness_id = TrySynthesizeImplicitAs(
+            context, loc_id, query_self_const_id, query_specific_interface);
+        if (witness_id.has_value()) {
+          if (mode != EvalImplLookupMode::RecheckPoisonedLookup) {
+            context.impl_lookup_cache().Insert(impl_lookup_cache_key,
+                                               witness_id);
+          }
+          return EvalImplLookupResult::MakeFinal(witness_id);
+        }
+      }
+
       return EvalImplLookupResult::MakeNone();
 
     case FoundInFacet:

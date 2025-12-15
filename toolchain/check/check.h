@@ -5,6 +5,7 @@
 #ifndef CARBON_TOOLCHAIN_CHECK_CHECK_H_
 #define CARBON_TOOLCHAIN_CHECK_CHECK_H_
 
+#include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "common/ostream.h"
 #include "toolchain/base/shared_value_stores.h"

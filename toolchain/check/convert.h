@@ -72,11 +72,6 @@ struct ConversionTarget {
   }
 };
 
-auto CanPerformBuiltinConversion(Context& context, SemIR::TypeId value_type_id,
-                                 ConversionTarget target,
-                                 SemIR::ClassType* vtable_class_type = nullptr)
-    -> bool;
-
 auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
                               SemIR::InstId value_id, ConversionTarget target,
                               SemIR::ClassType* vtable_class_type = nullptr)
