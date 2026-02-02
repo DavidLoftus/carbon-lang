@@ -63,48 +63,46 @@ fn Foo(n: ()) -> ((), ()) {
 // CHECK:STDOUT:       value_repr:      {kind: none, type: type(inst60000010)}
 // CHECK:STDOUT:   facet_types:     {}
 // CHECK:STDOUT:   insts:
-// CHECK:STDOUT:     instF:           {kind: Namespace, arg0: name_scope0, arg1: inst<none>, type: type(inst(NamespaceType))}
-// CHECK:STDOUT:     inst60000010:    {kind: TupleType, arg0: inst_block_empty, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000011:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000012:    {kind: TupleValue, arg0: inst_block_empty, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000013:    {kind: Converted, arg0: inst60000011, arg1: inst60000010, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000014:    {kind: ValueBinding, arg0: entity_name60000000, arg1: inst60000026, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000015:    {kind: PatternType, arg0: inst60000010, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000016:    {kind: ValueBindingPattern, arg0: entity_name60000000, type: type(inst60000015)}
-// CHECK:STDOUT:     inst60000017:    {kind: ValueParamPattern, arg0: inst60000016, arg1: call_param0, type: type(inst60000015)}
-// CHECK:STDOUT:     inst60000018:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000019:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst60000010)}
-// CHECK:STDOUT:     inst6000001A:    {kind: TupleType, arg0: inst_block60000007, type: type(TypeType)}
-// CHECK:STDOUT:     inst6000001B:    {kind: TupleLiteral, arg0: inst_block60000006, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst6000001C:    {kind: TupleValue, arg0: inst_block60000008, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst6000001D:    {kind: PointerType, arg0: inst6000001A, type: type(TypeType)}
-// CHECK:STDOUT:     inst6000001E:    {kind: Converted, arg0: inst60000012, arg1: inst60000010, type: type(TypeType)}
-// CHECK:STDOUT:     inst6000001F:    {kind: Converted, arg0: inst60000012, arg1: inst60000010, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000020:    {kind: Converted, arg0: inst6000001B, arg1: inst6000001A, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000021:    {kind: InitForm, arg0: inst60000020, arg1: call_param1, type: type(inst(FormType))}
-// CHECK:STDOUT:     inst60000022:    {kind: InitForm, arg0: inst6000001A, arg1: call_param1, type: type(inst(FormType))}
-// CHECK:STDOUT:     inst60000023:    {kind: PatternType, arg0: inst6000001A, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000024:    {kind: ReturnSlotPattern, arg0: inst60000020, type: type(inst60000023)}
-// CHECK:STDOUT:     inst60000025:    {kind: OutParamPattern, arg0: inst60000024, arg1: call_param1, type: type(inst60000023)}
-// CHECK:STDOUT:     inst60000026:    {kind: ValueParam, arg0: call_param0, arg1: name1, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000027:    {kind: SpliceBlock, arg0: inst_block60000004, arg1: inst60000013, type: type(TypeType)}
-// CHECK:STDOUT:     inst60000028:    {kind: OutParam, arg0: call_param1, arg1: name(ReturnSlot), type: type(inst6000001A)}
-// CHECK:STDOUT:     inst60000029:    {kind: ReturnSlot, arg0: inst6000001A, arg1: inst60000028, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst6000002A:    {kind: FunctionDecl, arg0: function60000000, arg1: inst_block6000000E, type: type(inst6000002B)}
-// CHECK:STDOUT:     inst6000002B:    {kind: FunctionType, arg0: function60000000, arg1: specific<none>, type: type(TypeType)}
-// CHECK:STDOUT:     inst6000002C:    {kind: StructValue, arg0: inst_block_empty, type: type(inst6000002B)}
-// CHECK:STDOUT:     inst6000002D:    {kind: NameRef, arg0: name1, arg1: inst60000014, type: type(inst60000010)}
-// CHECK:STDOUT:     inst6000002E:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst60000010)}
-// CHECK:STDOUT:     inst6000002F:    {kind: TupleLiteral, arg0: inst_block60000010, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst60000030:    {kind: TupleAccess, arg0: inst60000028, arg1: element0, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000031:    {kind: TupleInit, arg0: inst_block60000011, arg1: inst60000030, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000032:    {kind: Converted, arg0: inst6000002D, arg1: inst60000031, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000033:    {kind: TupleAccess, arg0: inst60000028, arg1: element1, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000034:    {kind: TupleInit, arg0: inst_block_empty, arg1: inst60000033, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000035:    {kind: Converted, arg0: inst6000002E, arg1: inst60000034, type: type(inst60000010)}
-// CHECK:STDOUT:     inst60000036:    {kind: TupleInit, arg0: inst_block60000012, arg1: inst60000028, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst60000037:    {kind: Converted, arg0: inst6000002F, arg1: inst60000036, type: type(inst6000001A)}
-// CHECK:STDOUT:     inst60000038:    {kind: ReturnExpr, arg0: inst60000037, arg1: inst60000028}
+// CHECK:STDOUT:     instE:           {kind: Namespace, arg0: name_scope0, arg1: inst<none>, type: type(inst(NamespaceType))}
+// CHECK:STDOUT:     inst6000000F:    {kind: TupleType, arg0: inst_block_empty, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000010:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000011:    {kind: TupleValue, arg0: inst_block_empty, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000012:    {kind: Converted, arg0: inst60000010, arg1: inst6000000F, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000013:    {kind: ValueBinding, arg0: entity_name60000000, arg1: inst60000023, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000014:    {kind: PatternType, arg0: inst6000000F, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000015:    {kind: ValueBindingPattern, arg0: entity_name60000000, type: type(inst60000014)}
+// CHECK:STDOUT:     inst60000016:    {kind: ValueParamPattern, arg0: inst60000015, arg1: call_param0, type: type(inst60000014)}
+// CHECK:STDOUT:     inst60000017:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000018:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000019:    {kind: TupleType, arg0: inst_block60000007, type: type(TypeType)}
+// CHECK:STDOUT:     inst6000001A:    {kind: TupleLiteral, arg0: inst_block60000006, type: type(inst60000019)}
+// CHECK:STDOUT:     inst6000001B:    {kind: TupleValue, arg0: inst_block60000008, type: type(inst60000019)}
+// CHECK:STDOUT:     inst6000001C:    {kind: PointerType, arg0: inst60000019, type: type(TypeType)}
+// CHECK:STDOUT:     inst6000001D:    {kind: Converted, arg0: inst60000011, arg1: inst6000000F, type: type(TypeType)}
+// CHECK:STDOUT:     inst6000001E:    {kind: Converted, arg0: inst60000011, arg1: inst6000000F, type: type(TypeType)}
+// CHECK:STDOUT:     inst6000001F:    {kind: Converted, arg0: inst6000001A, arg1: inst60000019, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000020:    {kind: PatternType, arg0: inst60000019, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000021:    {kind: ReturnSlotPattern, arg0: inst6000001F, type: type(inst60000020)}
+// CHECK:STDOUT:     inst60000022:    {kind: OutParamPattern, arg0: inst60000021, arg1: call_param1, type: type(inst60000020)}
+// CHECK:STDOUT:     inst60000023:    {kind: ValueParam, arg0: call_param0, arg1: name1, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000024:    {kind: SpliceBlock, arg0: inst_block60000004, arg1: inst60000012, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000025:    {kind: OutParam, arg0: call_param1, arg1: name(ReturnSlot), type: type(inst60000019)}
+// CHECK:STDOUT:     inst60000026:    {kind: ReturnSlot, arg0: inst60000019, arg1: inst60000025, type: type(inst60000019)}
+// CHECK:STDOUT:     inst60000027:    {kind: FunctionDecl, arg0: function60000000, arg1: inst_block6000000D, type: type(inst60000028)}
+// CHECK:STDOUT:     inst60000028:    {kind: FunctionType, arg0: function60000000, arg1: specific<none>, type: type(TypeType)}
+// CHECK:STDOUT:     inst60000029:    {kind: StructValue, arg0: inst_block_empty, type: type(inst60000028)}
+// CHECK:STDOUT:     inst6000002A:    {kind: NameRef, arg0: name1, arg1: inst60000013, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst6000002B:    {kind: TupleLiteral, arg0: inst_block_empty, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst6000002C:    {kind: TupleLiteral, arg0: inst_block6000000F, type: type(inst60000019)}
+// CHECK:STDOUT:     inst6000002D:    {kind: TupleAccess, arg0: inst60000026, arg1: element0, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst6000002E:    {kind: TupleAccess, arg0: inst60000026, arg1: element1, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst6000002F:    {kind: TupleInit, arg0: inst_block60000010, arg1: inst6000002D, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000030:    {kind: Converted, arg0: inst6000002A, arg1: inst6000002F, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000031:    {kind: TupleInit, arg0: inst_block_empty, arg1: inst6000002E, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000032:    {kind: Converted, arg0: inst6000002B, arg1: inst60000031, type: type(inst6000000F)}
+// CHECK:STDOUT:     inst60000033:    {kind: TupleInit, arg0: inst_block60000011, arg1: inst60000026, type: type(inst60000019)}
+// CHECK:STDOUT:     inst60000034:    {kind: Converted, arg0: inst6000002C, arg1: inst60000033, type: type(inst60000019)}
+// CHECK:STDOUT:     inst60000035:    {kind: ReturnExpr, arg0: inst60000034, arg1: inst60000026}
 // CHECK:STDOUT:   constant_values:
 // CHECK:STDOUT:     values:
 // CHECK:STDOUT:       instF:           concrete_constant(instF)
@@ -126,20 +124,17 @@ fn Foo(n: ()) -> ((), ()) {
 // CHECK:STDOUT:       inst60000020:    concrete_constant(inst6000001A)
 // CHECK:STDOUT:       inst60000021:    concrete_constant(inst60000022)
 // CHECK:STDOUT:       inst60000022:    concrete_constant(inst60000022)
-// CHECK:STDOUT:       inst60000023:    concrete_constant(inst60000023)
-// CHECK:STDOUT:       inst60000024:    concrete_constant(inst60000024)
-// CHECK:STDOUT:       inst60000025:    concrete_constant(inst60000025)
-// CHECK:STDOUT:       inst60000027:    concrete_constant(inst60000010)
-// CHECK:STDOUT:       inst6000002A:    concrete_constant(inst6000002C)
-// CHECK:STDOUT:       inst6000002B:    concrete_constant(inst6000002B)
-// CHECK:STDOUT:       inst6000002C:    concrete_constant(inst6000002C)
-// CHECK:STDOUT:       inst6000002E:    concrete_constant(inst60000012)
-// CHECK:STDOUT:       inst60000031:    concrete_constant(inst60000012)
-// CHECK:STDOUT:       inst60000032:    concrete_constant(inst60000012)
-// CHECK:STDOUT:       inst60000034:    concrete_constant(inst60000012)
-// CHECK:STDOUT:       inst60000035:    concrete_constant(inst60000012)
-// CHECK:STDOUT:       inst60000036:    concrete_constant(inst6000001C)
-// CHECK:STDOUT:       inst60000037:    concrete_constant(inst6000001C)
+// CHECK:STDOUT:       inst60000024:    concrete_constant(inst6000000F)
+// CHECK:STDOUT:       inst60000027:    concrete_constant(inst60000029)
+// CHECK:STDOUT:       inst60000028:    concrete_constant(inst60000028)
+// CHECK:STDOUT:       inst60000029:    concrete_constant(inst60000029)
+// CHECK:STDOUT:       inst6000002B:    concrete_constant(inst60000011)
+// CHECK:STDOUT:       inst6000002F:    concrete_constant(inst60000011)
+// CHECK:STDOUT:       inst60000030:    concrete_constant(inst60000011)
+// CHECK:STDOUT:       inst60000031:    concrete_constant(inst60000011)
+// CHECK:STDOUT:       inst60000032:    concrete_constant(inst60000011)
+// CHECK:STDOUT:       inst60000033:    concrete_constant(inst6000001B)
+// CHECK:STDOUT:       inst60000034:    concrete_constant(inst6000001B)
 // CHECK:STDOUT:     symbolic_constants: {}
 // CHECK:STDOUT:   inst_blocks:
 // CHECK:STDOUT:     inst_block_empty: {}
@@ -191,22 +186,12 @@ fn Foo(n: ()) -> ((), ()) {
 // CHECK:STDOUT:       10:              inst60000028
 // CHECK:STDOUT:       11:              inst60000029
 // CHECK:STDOUT:     inst_block6000000F:
-// CHECK:STDOUT:       0:               inst6000002D
-// CHECK:STDOUT:       1:               inst6000002E
-// CHECK:STDOUT:       2:               inst6000002F
-// CHECK:STDOUT:       3:               inst60000030
-// CHECK:STDOUT:       4:               inst60000031
-// CHECK:STDOUT:       5:               inst60000032
-// CHECK:STDOUT:       6:               inst60000033
-// CHECK:STDOUT:       7:               inst60000034
-// CHECK:STDOUT:       8:               inst60000035
-// CHECK:STDOUT:       9:               inst60000036
-// CHECK:STDOUT:       10:              inst60000037
-// CHECK:STDOUT:       11:              inst60000038
-// CHECK:STDOUT:     inst_block60000010:
-// CHECK:STDOUT:       0:               inst6000002D
-// CHECK:STDOUT:       1:               inst6000002E
-// CHECK:STDOUT:     inst_block60000011: {}
+// CHECK:STDOUT:       0:               inst6000002A
+// CHECK:STDOUT:       1:               inst6000002B
+// CHECK:STDOUT:     inst_block60000010: {}
+// CHECK:STDOUT:     inst_block60000011:
+// CHECK:STDOUT:       0:               inst60000030
+// CHECK:STDOUT:       1:               inst60000032
 // CHECK:STDOUT:     inst_block60000012:
 // CHECK:STDOUT:       0:               inst60000032
 // CHECK:STDOUT:       1:               inst60000035
@@ -270,11 +255,11 @@ fn Foo(n: ()) -> ((), ()) {
 // CHECK:STDOUT:   %n.ref: %empty_tuple.type = name_ref n, %n
 // CHECK:STDOUT:   %.loc17_15.1: %empty_tuple.type = tuple_literal () [concrete = constants.%empty_tuple]
 // CHECK:STDOUT:   %.loc17_16.1: %tuple.type = tuple_literal (%n.ref, %.loc17_15.1)
-// CHECK:STDOUT:   %tuple.elem0: ref %empty_tuple.type = tuple_access %return.param, element0
-// CHECK:STDOUT:   %.loc17_11: init %empty_tuple.type to %tuple.elem0 = tuple_init () [concrete = constants.%empty_tuple]
+// CHECK:STDOUT:   %tuple.elem0: ref %empty_tuple.type = tuple_access %return, element0
+// CHECK:STDOUT:   %tuple.elem1: ref %empty_tuple.type = tuple_access %return, element1
+// CHECK:STDOUT:   %.loc17_11: init %empty_tuple.type = tuple_init () to %tuple.elem0 [concrete = constants.%empty_tuple]
 // CHECK:STDOUT:   %.loc17_16.2: init %empty_tuple.type = converted %n.ref, %.loc17_11 [concrete = constants.%empty_tuple]
-// CHECK:STDOUT:   %tuple.elem1: ref %empty_tuple.type = tuple_access %return.param, element1
-// CHECK:STDOUT:   %.loc17_15.2: init %empty_tuple.type to %tuple.elem1 = tuple_init () [concrete = constants.%empty_tuple]
+// CHECK:STDOUT:   %.loc17_15.2: init %empty_tuple.type = tuple_init () to %tuple.elem1 [concrete = constants.%empty_tuple]
 // CHECK:STDOUT:   %.loc17_16.3: init %empty_tuple.type = converted %.loc17_15.1, %.loc17_15.2 [concrete = constants.%empty_tuple]
 // CHECK:STDOUT:   %.loc17_16.4: init %tuple.type to %return.param = tuple_init (%.loc17_16.2, %.loc17_16.3) [concrete = constants.%tuple]
 // CHECK:STDOUT:   %.loc17_17: init %tuple.type = converted %.loc17_16.1, %.loc17_16.4 [concrete = constants.%tuple]
