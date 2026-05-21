@@ -22,6 +22,10 @@
 
 namespace Carbon::LanguageServer {
 
+struct Options {
+  bool prelude_import = true;
+};
+
 // Context for LSP call handling.
 class Context {
  public:
@@ -41,6 +45,10 @@ class Context {
     }
 
    private:
+    // Runs the type-checker and compiles the file and dependencies.
+    auto Analyze(Context& context, Diagnostics::Consumer& consumer) -> void;
+
+   private:
     // The filename, stable across instances.
     clang::clangd::URIForFile uri_;
 
@@ -56,12 +64,14 @@ class Context {
   explicit Context(const InstallPaths* installation,
                    llvm::raw_ostream* vlog_stream,
                    Diagnostics::Consumer* consumer,
-                   clang::clangd::LSPBinder::RawOutgoing* outgoing)
+                   clang::clangd::LSPBinder::RawOutgoing* outgoing,
+                   Options options)
       : installation_(installation),
         vlog_stream_(vlog_stream),
         file_emitter_(consumer),
         no_loc_emitter_(consumer),
-        outgoing_(outgoing) {}
+        outgoing_(outgoing),
+        options_(options) {}
 
   // Returns a reference to the file if it's known, or diagnoses and returns
   // null.
@@ -83,6 +93,8 @@ class Context {
 
   auto files() -> Map<std::string, File>& { return files_; }
 
+  auto options() const -> const Options& { return options_; }
+
  private:
   const InstallPaths* installation_;
 
@@ -94,6 +106,8 @@ class Context {
 
   // Content of files managed by the language client.
   Map<std::string, File> files_;
+
+  Options options_;
 };
 
 }  // namespace Carbon::LanguageServer

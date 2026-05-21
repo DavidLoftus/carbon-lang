@@ -146,39 +146,147 @@ auto Context::File::SetText(Context& context, std::optional<int64_t> version,
   tree_and_subtrees_ =
       std::make_unique<Parse::TreeAndSubtrees>(*tokens_, *tree_);
 
-  SemIR::File sem_ir(tree_.get(), SemIR::CheckIRId(0), tree_->packaging_decl(),
-                     *value_stores_, uri_.file().str());
-  // TODO: Support cross-file checking when multiple files have edits.
-  llvm::SmallVector<Check::Unit> units = {{{.consumer = &consumer,
-                                            .value_stores = value_stores_.get(),
-                                            .timings = nullptr,
-                                            .sem_ir = &sem_ir,
-                                            .total_ir_count = 1}}};
-
-  auto getter = [this]() -> const Parse::TreeAndSubtrees& {
-    return *tree_and_subtrees_;
-  };
-  // TODO: Include any unsaved files as an overlay on the real file system.
-  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs =
-      llvm::vfs::getRealFileSystem();
-
-  // TODO: Include the prelude. Make sure `total_ir_count` includes the files.
-  Check::CheckParseTreesOptions check_options;
-  check_options.vlog_stream = context.vlog_stream();
-  auto getters =
-      Parse::GetTreeAndSubtreesStore::MakeWithExplicitSize(1, getter);
-
-  auto clang_invocation =
-      BuildClangInvocation(consumer, fs, context.installation(),
-                           llvm::sys::getDefaultTargetTriple());
-
-  Check::CheckParseTrees(units, getters, fs, check_options,
-                         std::move(clang_invocation));
+  Analyze(context, consumer);
 
   // Note we need to publish diagnostics even when empty.
   // TODO: Consider caching previously published diagnostics and only publishing
   // when they change.
   context.PublishDiagnostics(consumer.params());
+}
+
+auto Context::File::Analyze(Context& context, Diagnostics::Consumer& consumer) -> void {
+  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs =
+      llvm::vfs::getRealFileSystem();
+
+  // Load prelude files if requested.
+  llvm::SmallVector<std::string> prelude_filenames;
+  if (context.options().prelude_import) {
+    if (auto find = context.installation().ReadPreludeManifest(); find.ok()) {
+      prelude_filenames = std::move(*find);
+    } else {
+      CARBON_DIAGNOSTIC(LanguageServerPreludeManifestError, Error, "{0}",
+                        std::string);
+      context.no_loc_emitter().Emit(LanguageServerPreludeManifestError,
+                                    find.error().message());
+    }
+  }
+
+  int total_ir_count = prelude_filenames.size() + 1;
+
+  struct CheckedUnit {
+    std::unique_ptr<SourceBuffer> source;
+    std::unique_ptr<SharedValueStores> value_stores;
+    std::unique_ptr<Lex::TokenizedBuffer> tokens;
+    std::unique_ptr<Parse::Tree> tree;
+    std::unique_ptr<Parse::TreeAndSubtrees> tree_and_subtrees;
+    std::unique_ptr<SemIR::File> sem_ir;
+  };
+
+  llvm::SmallVector<CheckedUnit> prelude_units;
+  prelude_units.reserve(prelude_filenames.size());
+
+  llvm::SmallVector<Check::Unit> check_units;
+  check_units.reserve(total_ir_count);
+
+  auto getters = Parse::GetTreeAndSubtreesStore::MakeWithExplicitSize(
+      total_ir_count, nullptr);
+
+  // Keeper to ensure lambdas passed to getters remain alive and at stable
+  // addresses.
+  llvm::SmallVector<
+      std::unique_ptr<std::function<const Parse::TreeAndSubtrees&()>>>
+      lambda_keeper;
+  lambda_keeper.reserve(total_ir_count);
+
+  int unit_index = 0;
+
+  class IgnoreConsumer : public Diagnostics::Consumer {
+   public:
+    auto HandleDiagnostic(Diagnostics::Diagnostic /*diagnostic*/)
+        -> void override {}
+  };
+  IgnoreConsumer prelude_consumer;
+
+  for (const auto& filename : prelude_filenames) {
+    auto source_buf =
+        SourceBuffer::MakeFromFileOrStdin(*fs, filename, prelude_consumer);
+    if (!source_buf) {
+      continue;
+    }
+    auto heap_source = std::make_unique<SourceBuffer>(std::move(*source_buf));
+    auto val_stores = std::make_unique<SharedValueStores>();
+    Lex::LexOptions lex_opts;
+    lex_opts.consumer = &prelude_consumer;
+    auto tokens_buf = std::make_unique<Lex::TokenizedBuffer>(
+        Lex::Lex(*val_stores, *heap_source, lex_opts));
+
+    Parse::ParseOptions parse_opts;
+    parse_opts.consumer = &prelude_consumer;
+    auto parse_tree =
+        std::make_unique<Parse::Tree>(Parse::Parse(*tokens_buf, parse_opts));
+
+    auto tree_sub =
+        std::make_unique<Parse::TreeAndSubtrees>(*tokens_buf, *parse_tree);
+
+    auto sem_ir_file = std::make_unique<SemIR::File>(
+        parse_tree.get(), SemIR::CheckIRId(unit_index),
+        parse_tree->packaging_decl(), *val_stores, filename);
+
+    auto lambda =
+        std::make_unique<std::function<const Parse::TreeAndSubtrees&()>>(
+            [tree_sub_ptr = tree_sub.get()]() -> const Parse::TreeAndSubtrees& {
+              return *tree_sub_ptr;
+            });
+    getters.Set(SemIR::CheckIRId(unit_index), *lambda);
+    lambda_keeper.push_back(std::move(lambda));
+
+    check_units.push_back({.consumer = &prelude_consumer,
+                           .value_stores = val_stores.get(),
+                           .timings = nullptr,
+                           .sem_ir = sem_ir_file.get(),
+                           .llvm_context = nullptr,
+                           .total_ir_count = total_ir_count});
+
+    prelude_units.push_back({.source = std::move(heap_source),
+                             .value_stores = std::move(val_stores),
+                             .tokens = std::move(tokens_buf),
+                             .tree = std::move(parse_tree),
+                             .tree_and_subtrees = std::move(tree_sub),
+                             .sem_ir = std::move(sem_ir_file)});
+
+    ++unit_index;
+  }
+
+  SemIR::File sem_ir(tree_.get(), SemIR::CheckIRId(unit_index),
+                     tree_->packaging_decl(), *value_stores_,
+                     uri_.file().str());
+
+  auto lambda =
+      std::make_unique<std::function<const Parse::TreeAndSubtrees&()>>(
+          [tree_sub_ptr =
+               tree_and_subtrees_.get()]() -> const Parse::TreeAndSubtrees& {
+            return *tree_sub_ptr;
+          });
+  getters.Set(SemIR::CheckIRId(unit_index), *lambda);
+  lambda_keeper.push_back(std::move(lambda));
+
+  check_units.push_back({.consumer = &consumer,
+                         .value_stores = value_stores_.get(),
+                         .timings = nullptr,
+                         .sem_ir = &sem_ir,
+                         .llvm_context = nullptr,
+                         .total_ir_count = total_ir_count});
+
+  Check::CheckParseTreesOptions check_options;
+  check_options.prelude_import = context.options().prelude_import;
+  check_options.vlog_stream = context.vlog_stream();
+
+  auto clang_invocation =
+      BuildClangInvocation(consumer, fs, context.installation(),
+                           llvm::sys::getDefaultTargetTriple());
+
+  Check::CheckParseTrees(check_units, getters, fs, check_options,
+                         std::move(clang_invocation));
 }
 
 auto Context::LookupFile(llvm::StringRef filename) -> File* {

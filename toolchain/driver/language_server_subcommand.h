@@ -19,9 +19,12 @@ class LanguageServerSubcommand : public DriverSubcommand {
  public:
   explicit LanguageServerSubcommand();
 
-  auto BuildOptions(CommandLine::CommandBuilder& /*b*/) -> void override {}
+  auto BuildOptions(CommandLine::CommandBuilder& b) -> void override;
 
   auto Run(DriverEnv& driver_env) -> DriverResult override;
+
+ private:
+  bool prelude_import_ = true;
 };
 
 }  // namespace Carbon

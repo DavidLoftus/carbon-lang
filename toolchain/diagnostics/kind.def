@@ -591,6 +591,7 @@ CARBON_DIAGNOSTIC_KIND(LanguageServerNotificationParseError)
 CARBON_DIAGNOSTIC_KIND(LanguageServerTransportError)
 CARBON_DIAGNOSTIC_KIND(LanguageServerUnexpectedReply)
 CARBON_DIAGNOSTIC_KIND(LanguageServerUnsupportedNotification)
+CARBON_DIAGNOSTIC_KIND(LanguageServerPreludeManifestError)
 
 // Document handling.
 CARBON_DIAGNOSTIC_KIND(LanguageServerOpenDuplicateFile)
