@@ -158,6 +158,7 @@ cc_library(
         "//common:concepts",
         "//common:emplace_by_calling",
         "//common:enum_mask_base",
+        "//common:error",
         "//common:find",
         "//common:growing_range",
         "//common:map",

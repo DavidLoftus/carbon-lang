@@ -52,6 +52,19 @@ class PendingBlock {
     size_t cleanups_size_;
   };
 
+  auto Size() const -> size_t { return insts_.size(); }
+
+  auto CleanupsSize() const -> size_t { return cleanups_.size(); }
+
+  auto DiscardUnusedInsts(size_t size, size_t cleanups_size) -> void {
+    if (insts_.size() > size) {
+      insts_.truncate(size);
+    }
+    if (cleanups_.size() > cleanups_size) {
+      cleanups_.truncate(cleanups_size);
+    }
+  }
+
   template <typename InstT, typename LocT>
     requires(std::convertible_to<LocT, SemIR::LocId>)
   auto AddInst(LocT loc_id, InstT inst) -> SemIR::InstId {
