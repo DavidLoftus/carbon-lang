@@ -127,9 +127,17 @@ let min_rounds_to_inf_hex: f64 = 0x1.FFFFFFFFFFFFF8p+1023;
 
 library "[[@TEST_NAME]]";
 
-// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+4]]:14: error: value 50*10^2147483647 too large for floating-point type `f64` [FloatLiteralTooLargeForType]
+// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+12]]:14: error: `let` declarations must end with a `;` [ExpectedDeclSemi]
 // CHECK:STDERR: let e: f64 = 5.0e39999999999999999993;
 // CHECK:STDERR:              ^~~~~~~~~~~~~~~~~~~~~~~~
+// CHECK:STDERR:
+// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+8]]:14: error: semantics TODO: `handle invalid parse trees in `check`` [SemanticsTodo]
+// CHECK:STDERR: let e: f64 = 5.0e39999999999999999993;
+// CHECK:STDERR:              ^~~~~~~~~~~~~~~~~~~~~~~~
+// CHECK:STDERR:
+// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+4]]:18: error: floating-point literal exponent too large [RealLiteralExponentTooLarge]
+// CHECK:STDERR: let e: f64 = 5.0e39999999999999999993;
+// CHECK:STDERR:                  ^
 // CHECK:STDERR:
 let e: f64 = 5.0e39999999999999999993;
 

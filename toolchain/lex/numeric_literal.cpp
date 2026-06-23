@@ -115,6 +115,8 @@ class NumericLiteral::Parser {
   // literal.
   auto GetExponent() -> llvm::APInt;
 
+  auto exponent_part() const -> llvm::StringRef { return exponent_part_; }
+
  private:
   struct CheckDigitSequenceResult {
     bool ok;
@@ -494,11 +496,19 @@ auto NumericLiteral::ComputeValue(
     return IntValue{.value = parser.GetMantissa()};
   }
 
+  llvm::APInt exponent = parser.GetExponent();
+  if (exponent.getSignificantBits() > 32) {
+    CARBON_DIAGNOSTIC(RealLiteralExponentTooLarge, Error,
+                      "floating-point literal exponent too large");
+    emitter.Emit(parser.exponent_part().begin(), RealLiteralExponentTooLarge);
+    return UnrecoverableError();
+  }
+
   return RealValue{
       .radix = (parser.GetRadix() == Radix::Decimal ? Radix::Decimal
                                                     : Radix::Binary),
       .mantissa = parser.GetMantissa(),
-      .exponent = parser.GetExponent()};
+      .exponent = std::move(exponent)};
 }
 
 }  // namespace Carbon::Lex

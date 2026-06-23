@@ -267,19 +267,6 @@ TEST_F(NumericLiteralTest, HandlesRealLiteral) {
        .exponent = -20,
        .radix = 16,
        .int_value = 0},
-      // The exponent here works out as exactly INT64_MIN.
-      {.token = "0x1.01p-9223372036854775800",
-       .mantissa = 0x101,
-       .exponent = -9223372036854775807L - 1L,
-       .radix = 16,
-       .int_value = 1},
-      // The exponent here doesn't fit in a signed 64-bit integer until we
-      // adjust for the radix point.
-      {.token = "0x1.01p9223372036854775809",
-       .mantissa = 0x101,
-       .exponent = 9223372036854775801L,
-       .radix = 16,
-       .int_value = 1},
 
       // Binary real literals. These are invalid, but we accept them for error
       // recovery.
@@ -323,15 +310,8 @@ TEST_F(NumericLiteralTest, HandlesRealLiteral) {
 TEST_F(NumericLiteralTest, HandlesRealLiteralOverflow) {
   llvm::StringLiteral input = "0x1.000001p-9223372036854775800";
   error_tracker.Reset();
-  EXPECT_THAT(
-      Parse(input),
-      HasRealValue({.radix = 2,
-                    .mantissa = IsUnsignedInt(0x1000001),
-                    .exponent = Truly([](llvm::APInt exponent) {
-                      return (exponent + 9223372036854775800).getSExtValue() ==
-                             -24;
-                    })}));
-  EXPECT_FALSE(error_tracker.seen_error());
+  EXPECT_THAT(Parse(input), HasUnrecoverableError());
+  EXPECT_TRUE(error_tracker.seen_error());
 }
 
 TEST_F(NumericLiteralTest, ValidatesRealLiterals) {
@@ -381,6 +361,9 @@ TEST_F(NumericLiteralTest, ValidatesRealLiterals) {
       "0.0e+A",
       "0x0.0pA",
       "0x0.0p-A",
+      // Exponent overflows 32-bit signed int.
+      "0x1.01p-9223372036854775800",
+      "0x1.01p9223372036854775809",
   };
   for (llvm::StringLiteral literal : invalid) {
     error_tracker.Reset();

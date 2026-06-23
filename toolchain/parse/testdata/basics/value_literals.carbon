@@ -22,14 +22,14 @@ var ints: array(i32, 5) = (
 
 // --- real_literals.carbon
 
-var reals: array(f64, 7) = (
+var reals: array(f64, 6) = (
     0.9,
     8.0,
     80.0,
     1.0e7,
     1.0e8,
     1.0e-8,
-    39999999999999999993.0e39999999999999999993,
+
 );
 
 // --- bool_literal.carbon
@@ -83,7 +83,7 @@ var test_str: str = "Test";
 // CHECK:STDOUT:             {kind: 'ArrayExprOpenParen', text: '('},
 // CHECK:STDOUT:             {kind: 'FloatTypeLiteral', text: 'f64'},
 // CHECK:STDOUT:             {kind: 'ArrayExprComma', text: ','},
-// CHECK:STDOUT:             {kind: 'IntLiteral', text: '7'},
+// CHECK:STDOUT:             {kind: 'IntLiteral', text: '6'},
 // CHECK:STDOUT:           {kind: 'ArrayExpr', text: ')', subtree_size: 6},
 // CHECK:STDOUT:         {kind: 'VarBindingPattern', text: ':', subtree_size: 8},
 // CHECK:STDOUT:       {kind: 'VariablePattern', text: 'var', subtree_size: 9},
@@ -101,10 +101,8 @@ var test_str: str = "Test";
 // CHECK:STDOUT:         {kind: 'TupleLiteralComma', text: ','},
 // CHECK:STDOUT:         {kind: 'RealLiteral', text: '1.0e-8'},
 // CHECK:STDOUT:         {kind: 'TupleLiteralComma', text: ','},
-// CHECK:STDOUT:         {kind: 'RealLiteral', text: '39999999999999999993.0e39999999999999999993'},
-// CHECK:STDOUT:         {kind: 'TupleLiteralComma', text: ','},
-// CHECK:STDOUT:       {kind: 'TupleLiteral', text: ')', subtree_size: 16},
-// CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 28},
+// CHECK:STDOUT:       {kind: 'TupleLiteral', text: ')', subtree_size: 14},
+// CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 26},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]
 // CHECK:STDOUT: - filename: bool_literal.carbon
