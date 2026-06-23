@@ -45,12 +45,29 @@ class Real : public Printable<Real> {
   auto exponent() const -> int32_t { return exponent_; }
   auto is_decimal() const -> bool { return is_decimal_; }
 
+  auto operator+=(const Real& rhs) -> Real&;
+  auto operator-=(const Real& rhs) -> Real&;
+  auto operator*=(const Real& rhs) -> Real&;
+
+  friend auto operator-(Real real) -> Real;
+
   auto Print(llvm::raw_ostream& output_stream) const -> void {
     output_stream << mantissa_ << "*" << (is_decimal_ ? "10" : "2") << "^"
                   << exponent_;
   }
 
  private:
+  // Converts `this` to normalized decadic representation.
+  auto ConvertToDecadic() -> void;
+
+  // Reduces `this` to most compact representation while preserving base. i.e.
+  // ensures mantissa is not a multiple of the base.
+  auto Normalize() -> void;
+
+  // Updates `this` to equivalent repsentation where exponent is reduced by n.
+  // Assumes bit width is already large enough.
+  auto ShiftExponentIntoMantissa(unsigned n) -> void;
+
   // The mantissa, represented as a signed integer.
   llvm::APInt mantissa_;
 
@@ -61,6 +78,10 @@ class Real : public Printable<Real> {
   // If true, the value is mantissa * 10^exponent.
   bool is_decimal_;
 };
+
+auto operator+(Real lhs, const Real& rhs) -> Real;
+auto operator-(Real lhs, const Real& rhs) -> Real;
+auto operator*(Real lhs, const Real& rhs) -> Real;
 
 }  // namespace Carbon
 

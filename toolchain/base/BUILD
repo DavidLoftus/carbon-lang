@@ -221,6 +221,19 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "real_test",
+    size = "small",
+    srcs = ["real_test.cpp"],
+    deps = [
+        ":real",
+        "//common:raw_string_ostream",
+        "//testing/base:gtest_main",
+        "@googletest//:gtest",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
 cc_library(
     name = "relational_value_store",
     hdrs = ["relational_value_store.h"],
