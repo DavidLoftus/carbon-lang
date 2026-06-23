@@ -29,6 +29,7 @@
 #include "toolchain/diagnostics/diagnostic.h"
 #include "toolchain/diagnostics/emitter.h"
 #include "toolchain/diagnostics/format_providers.h"
+#include "toolchain/lex/numeric_literal.h"
 #include "toolchain/sem_ir/builtin_function_kind.h"
 #include "toolchain/sem_ir/constant.h"
 #include "toolchain/sem_ir/facet_type_info.h"
@@ -1426,10 +1427,11 @@ static auto RealToAPFloat(Context& context, RealId real_id,
 
   // Convert the real value to a string.
   llvm::SmallString<64> str;
-  real_value.mantissa.toString(str, real_value.is_decimal ? 10 : 16,
-                               /*signed=*/false, /*formatAsCLiteral=*/true);
-  str += real_value.is_decimal ? "e" : "p";
-  real_value.exponent.toStringSigned(str);
+  real_value.mantissa().toString(str, real_value.is_decimal() ? 10 : 16,
+                                 /*signed=*/true,
+                                 /*formatAsCLiteral=*/true);
+  str += real_value.is_decimal() ? "e" : "p";
+  llvm::raw_svector_ostream(str) << real_value.exponent();
 
   // Convert the string to an APFloat.
   // TODO: The implementation of this conversion effectively converts back to
@@ -1545,10 +1547,7 @@ static auto PerformIntToFloatConvert(Context& context, SemIR::LocId loc_id,
       context.TODO(loc_id, "negative float literal conversion");
       return SemIR::ErrorInst::ConstantId;
     }
-    auto real_id = context.reals().Add(
-        Real{.mantissa = mantissa,
-             .exponent = llvm::APInt(32, 0, /*isSigned=*/true),
-             .is_decimal = true});
+    auto real_id = context.reals().Add(Real(mantissa, 0, /*is_decimal=*/true));
     return MakeConstantResult(
         context,
         SemIR::FloatLiteralValue{.type_id = dest_type_id, .real_id = real_id},
@@ -1604,27 +1603,17 @@ struct BitWidthBounds {
 // literal value when converted to an integer, rounding towards zero.
 static auto EstimateRealLiteralBitWidth(const Real& real_val)
     -> BitWidthBounds {
-  const llvm::APInt& mantissa = real_val.mantissa;
-  const llvm::APInt& exponent = real_val.exponent;
+  const llvm::APInt& mantissa = real_val.mantissa();
+  int32_t exponent = real_val.exponent();
 
-  if (mantissa.isZero() ||
-      (exponent.isNegative() && exponent.abs().getActiveBits() > 64)) {
-    // If the result is definitely less than one, it rounds to zero.
+  if (mantissa.isZero()) {
     return {.lower_bound = 0, .upper_bound = 0};
   }
 
-  // Check if the exponent is extremely large, indicating an immediate overflow.
-  // We return the maximum possible bit width since the mathematically evaluated
-  // value has at least 2^64 bits.
-  if (!exponent.isNegative() && exponent.getActiveBits() > 64) {
-    return {.lower_bound = static_cast<uint64_t>(-1),
-            .upper_bound = static_cast<uint64_t>(-1)};
-  }
-
-  uint64_t abs_exponent = exponent.abs().getZExtValue();
+  uint64_t abs_exponent = std::abs(exponent);
   uint64_t scale_min = abs_exponent;
   uint64_t scale_max = abs_exponent;
-  if (real_val.is_decimal) {
+  if (real_val.is_decimal()) {
     // 10^4 = 10000 > 8192 = 2^13, so each decimal digit changes the size by
     // at least 13/4 bits (safe lower-bound scaling).
     scale_min = (abs_exponent * 13) / 4;
@@ -1636,7 +1625,7 @@ static auto EstimateRealLiteralBitWidth(const Real& real_val)
   uint64_t lower_bound = mantissa.getActiveBits();
   uint64_t upper_bound = mantissa.getActiveBits();
 
-  if (exponent.isNegative()) {
+  if (exponent < 0) {
     // A negative exponent decreases the result size.
     lower_bound = (lower_bound > scale_max) ? (lower_bound - scale_max) : 0;
     upper_bound = (upper_bound > scale_min) ? (upper_bound - scale_min) : 0;
@@ -1655,8 +1644,8 @@ static auto ConvertRealLiteralToInt(Context& context, SemIR::LocId loc_id,
                                     bool dest_is_signed, IntId bit_width_id)
     -> SemIR::ConstantId {
   const auto& real_val = context.reals().Get(real_id);
-  const llvm::APInt& mantissa = real_val.mantissa;
-  const llvm::APInt& exponent = real_val.exponent;
+  const llvm::APInt& mantissa = real_val.mantissa();
+  int32_t exponent = real_val.exponent();
 
   auto bounds = EstimateRealLiteralBitWidth(real_val);
   if (bounds.upper_bound == 0) {
@@ -1684,9 +1673,10 @@ static auto ConvertRealLiteralToInt(Context& context, SemIR::LocId loc_id,
   }
 
   // Compute an upper bound on the bit width of base^exponent.
-  unsigned abs_exponent = exponent.abs().getZExtValue();
+  unsigned abs_exponent =
+      exponent < 0 ? -static_cast<int64_t>(exponent) : exponent;
   unsigned exponent_upper_bound =
-      real_val.is_decimal ? ((abs_exponent * 10 + 2) / 3) : abs_exponent;
+      real_val.is_decimal() ? ((abs_exponent * 10 + 2) / 3) : abs_exponent;
 
   // If the exponent is positive, base^exponent cannot be larger than the result
   // size. If it's negative, base^exponent can't be *much* larger than the
@@ -1704,9 +1694,9 @@ static auto ConvertRealLiteralToInt(Context& context, SemIR::LocId loc_id,
 
   // Compute the integer result.
   llvm::APInt integer_val = mantissa.zextOrTrunc(calc_width);
-  if (!real_val.is_decimal) {
+  if (!real_val.is_decimal()) {
     // Binary exponent (mantissa * 2^exponent).
-    if (!exponent.isNegative()) {
+    if (exponent >= 0) {
       integer_val <<= abs_exponent;
     } else {
       integer_val.lshrInPlace(abs_exponent);
@@ -1715,7 +1705,7 @@ static auto ConvertRealLiteralToInt(Context& context, SemIR::LocId loc_id,
     // Decimal exponent (mantissa * 10^exponent).
     llvm::APInt ten(calc_width, 10);
     llvm::APInt ten_pow = llvm::APIntOps::pow(ten, abs_exponent);
-    if (!exponent.isNegative()) {
+    if (exponent >= 0) {
       integer_val *= ten_pow;
     } else {
       integer_val = integer_val.udiv(ten_pow);

@@ -1120,9 +1120,8 @@ auto Lexer::LexNumericLiteral(llvm::StringRef source_text, ssize_t& position)
     }
     case CARBON_KIND(NumericLiteral::RealValue&& value): {
       auto real_id = buffer_.value_stores_->reals().Add(
-          Real{.mantissa = value.mantissa,
-               .exponent = value.exponent,
-               .is_decimal = (value.radix == NumericLiteral::Radix::Decimal)});
+          Real(std::move(value.mantissa), std::move(value.exponent),
+               value.radix == NumericLiteral::Radix::Decimal));
       return LexTokenWithPayload(TokenKind::RealLiteral, real_id.index,
                                  byte_offset);
     }

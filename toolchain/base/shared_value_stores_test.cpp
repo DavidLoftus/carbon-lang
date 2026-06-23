@@ -45,8 +45,7 @@ TEST(SharedValueStores, PrintVals) {
   llvm::APInt apint(64, 8, /*isSigned=*/true);
   value_stores.ints().AddSigned(apint);
   value_stores.ints().AddSigned(llvm::APInt(64, 999'999'999'999));
-  value_stores.reals().Add(
-      Real{.mantissa = apint, .exponent = apint, .is_decimal = true});
+  value_stores.reals().Add(Real(apint, apint, /*is_decimal=*/true));
   value_stores.identifiers().Add("a");
   value_stores.string_literal_values().Add("foo'\"baz");
   RawStringOstream out;

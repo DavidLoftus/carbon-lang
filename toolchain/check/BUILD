@@ -174,6 +174,7 @@ cc_library(
         "//toolchain/check:generic_region_stack",
         "//toolchain/diagnostics:emitter",
         "//toolchain/diagnostics:format_providers",
+        "//toolchain/lex:numeric_literal",
         "//toolchain/lex:token_info",
         "//toolchain/lex:token_kind",
         "//toolchain/lex:tokenized_buffer",

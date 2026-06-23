@@ -209,6 +209,19 @@ cc_library(
 )
 
 cc_library(
+    name = "real",
+    srcs = ["real.cpp"],
+    hdrs = ["real.h"],
+    deps = [
+        ":index_base",
+        ":yaml",
+        "//common:check",
+        "//common:ostream",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
     name = "relational_value_store",
     hdrs = ["relational_value_store.h"],
     deps = [
@@ -263,6 +276,7 @@ cc_test(
     size = "small",
     srcs = ["value_store_test.cpp"],
     deps = [
+        ":real",
         ":shared_value_stores",
         ":value_ids",
         ":value_store",
@@ -352,6 +366,7 @@ cc_library(
         ":canonical_value_store",
         ":int",
         ":mem_usage",
+        ":real",
         ":value_ids",
         ":value_store",
         ":yaml",

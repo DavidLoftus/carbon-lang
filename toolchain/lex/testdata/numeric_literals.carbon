@@ -88,7 +88,7 @@ fn F() {
     // CHECK:STDOUT:   - { index: 54, kind:      "RealLiteral", line: {{ *}}[[@LINE-1]], column:  5, indent: 5, spelling: "1.0e-8", value: "10*10^-9", has_leading_space: true }
     // CHECK:STDOUT:   - { index: 55, kind:            "Comma", line: {{ *}}[[@LINE-2]], column: 11, indent: 5, spelling: "," }
     39999999999999999993.0e39999999999999999993,
-    // CHECK:STDOUT:   - { index: 56, kind:      "RealLiteral", line: {{ *}}[[@LINE-1]], column:  5, indent: 5, spelling: "39999999999999999993.0e39999999999999999993", value: "399999999999999999930*10^39999999999999999992", has_leading_space: true }
+    // CHECK:STDOUT:   - { index: 56, kind:      "RealLiteral", line: {{ *}}[[@LINE-1]], column:  5, indent: 5, spelling: "39999999999999999993.0e39999999999999999993", value: "399999999999999999930*10^2147483647", has_leading_space: true }
     // CHECK:STDOUT:   - { index: 57, kind:            "Comma", line: {{ *}}[[@LINE-2]], column: 48, indent: 5, spelling: "," }
   );
   // CHECK:STDOUT:   - { index: 58, kind:       "CloseParen", line: {{ *}}[[@LINE-1]], column:  3, indent: 3, spelling: ")", opening_token: 43, has_leading_space: true }

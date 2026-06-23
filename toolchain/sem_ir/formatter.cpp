@@ -1630,8 +1630,9 @@ auto Formatter::FormatArg(ExprRegionId id) -> void {
 auto Formatter::FormatArg(RealId id) -> void {
   // TODO: Format with a `.` when the exponent is near zero.
   const auto& real = sem_ir_->reals().Get(id);
-  real.mantissa.print(out(), /*isSigned=*/false);
-  out() << (real.is_decimal ? 'e' : 'p') << real.exponent;
+
+  out() << real.mantissa() << (real.is_decimal() ? 'e' : 'p')
+        << real.exponent();
 }
 
 auto Formatter::FormatArg(StringLiteralValueId id) -> void {

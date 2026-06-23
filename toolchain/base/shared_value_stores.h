@@ -10,6 +10,7 @@
 #include "toolchain/base/canonical_value_store.h"
 #include "toolchain/base/int.h"
 #include "toolchain/base/mem_usage.h"
+#include "toolchain/base/real.h"
 #include "toolchain/base/value_ids.h"
 #include "toolchain/base/value_store.h"
 #include "toolchain/base/yaml.h"

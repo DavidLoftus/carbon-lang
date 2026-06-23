@@ -14,34 +14,6 @@
 
 namespace Carbon {
 
-// The value of a real literal token.
-//
-// This is either a dyadic fraction (mantissa * 2^exponent) or a decadic
-// fraction (mantissa * 10^exponent).
-//
-// These values are not canonicalized, because we don't expect them to repeat.
-// We use RealIds in SemIR::FloatLiteralValues, and this results in all real
-// literals being distinct constants, even if they represent the same value.
-// TODO: Address this by using a different representation in SemIR.
-struct Real : public Printable<Real> {
-  auto Print(llvm::raw_ostream& output_stream) const -> void {
-    mantissa.print(output_stream, /*isSigned=*/false);
-    output_stream << "*" << (is_decimal ? "10" : "2") << "^" << exponent;
-  }
-
-  // The mantissa, represented as an unsigned integer.
-  llvm::APInt mantissa;
-
-  // The exponent, represented as a signed integer.
-  llvm::APInt exponent;
-
-  // If false, the value is mantissa * 2^exponent.
-  // If true, the value is mantissa * 10^exponent.
-  // TODO: This field increases Real from 32 bytes to 40 bytes. Consider
-  // changing how it's tracked for space savings.
-  bool is_decimal;
-};
-
 // Corresponds to a float value represented by an APFloat. This is used for
 // floating-point values in SemIR.
 struct FloatId : public IdBase<FloatId> {

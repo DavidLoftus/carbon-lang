@@ -127,7 +127,7 @@ let min_rounds_to_inf_hex: f64 = 0x1.FFFFFFFFFFFFF8p+1023;
 
 library "[[@TEST_NAME]]";
 
-// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+4]]:14: error: value 50*10^39999999999999999992 too large for floating-point type `f64` [FloatLiteralTooLargeForType]
+// CHECK:STDERR: fail_overflow_very_large_exponent.carbon:[[@LINE+4]]:14: error: value 50*10^2147483647 too large for floating-point type `f64` [FloatLiteralTooLargeForType]
 // CHECK:STDERR: let e: f64 = 5.0e39999999999999999993;
 // CHECK:STDERR:              ^~~~~~~~~~~~~~~~~~~~~~~~
 // CHECK:STDERR:
@@ -139,12 +139,12 @@ let e: f64 = 5.0e39999999999999999993;
 // CHECK:STDOUT:   %int_8.b85: Core.IntLiteral = int_value 8 [concrete]
 // CHECK:STDOUT:   %int_9.988: Core.IntLiteral = int_value 9 [concrete]
 // CHECK:STDOUT:   %int_2147483647.d89: Core.IntLiteral = int_value 2147483647 [concrete]
-// CHECK:STDOUT:   %float.b06: Core.FloatLiteral = float_literal_value 9e-1 [concrete]
-// CHECK:STDOUT:   %float.025: Core.FloatLiteral = float_literal_value 80e-1 [concrete]
-// CHECK:STDOUT:   %float.3b0: Core.FloatLiteral = float_literal_value 800e-1 [concrete]
-// CHECK:STDOUT:   %float.d22: Core.FloatLiteral = float_literal_value 10e6 [concrete]
-// CHECK:STDOUT:   %float.8d2: Core.FloatLiteral = float_literal_value 10e7 [concrete]
-// CHECK:STDOUT:   %float.48b: Core.FloatLiteral = float_literal_value 10e-9 [concrete]
+// CHECK:STDOUT:   %float.3db: Core.FloatLiteral = float_literal_value 9e-1 [concrete]
+// CHECK:STDOUT:   %float.f3c: Core.FloatLiteral = float_literal_value 80e-1 [concrete]
+// CHECK:STDOUT:   %float.d48: Core.FloatLiteral = float_literal_value 800e-1 [concrete]
+// CHECK:STDOUT:   %float.b79: Core.FloatLiteral = float_literal_value 10e6 [concrete]
+// CHECK:STDOUT:   %float.d3e: Core.FloatLiteral = float_literal_value 10e7 [concrete]
+// CHECK:STDOUT:   %float.ab7: Core.FloatLiteral = float_literal_value 10e-9 [concrete]
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: fn @F() {
@@ -157,12 +157,12 @@ let e: f64 = 5.0e39999999999999999993;
 // CHECK:STDOUT:   %int_2147483647.loc13: Core.IntLiteral = int_value 2147483647 [concrete = constants.%int_2147483647.d89]
 // CHECK:STDOUT:   %int_2147483647.loc14: Core.IntLiteral = int_value 2147483647 [concrete = constants.%int_2147483647.d89]
 // CHECK:STDOUT:   <elided>
-// CHECK:STDOUT:   %float.loc19: Core.FloatLiteral = float_literal_value 9e-1 [concrete = constants.%float.b06]
-// CHECK:STDOUT:   %float.loc20: Core.FloatLiteral = float_literal_value 80e-1 [concrete = constants.%float.025]
-// CHECK:STDOUT:   %float.loc21: Core.FloatLiteral = float_literal_value 800e-1 [concrete = constants.%float.3b0]
-// CHECK:STDOUT:   %float.loc22: Core.FloatLiteral = float_literal_value 10e6 [concrete = constants.%float.d22]
-// CHECK:STDOUT:   %float.loc23: Core.FloatLiteral = float_literal_value 10e7 [concrete = constants.%float.8d2]
-// CHECK:STDOUT:   %float.loc24: Core.FloatLiteral = float_literal_value 10e-9 [concrete = constants.%float.48b]
+// CHECK:STDOUT:   %float.loc19: Core.FloatLiteral = float_literal_value 9e-1 [concrete = constants.%float.3db]
+// CHECK:STDOUT:   %float.loc20: Core.FloatLiteral = float_literal_value 80e-1 [concrete = constants.%float.f3c]
+// CHECK:STDOUT:   %float.loc21: Core.FloatLiteral = float_literal_value 800e-1 [concrete = constants.%float.d48]
+// CHECK:STDOUT:   %float.loc22: Core.FloatLiteral = float_literal_value 10e6 [concrete = constants.%float.b79]
+// CHECK:STDOUT:   %float.loc23: Core.FloatLiteral = float_literal_value 10e7 [concrete = constants.%float.d3e]
+// CHECK:STDOUT:   %float.loc24: Core.FloatLiteral = float_literal_value 10e-9 [concrete = constants.%float.ab7]
 // CHECK:STDOUT:   <elided>
 // CHECK:STDOUT: }
 // CHECK:STDOUT:

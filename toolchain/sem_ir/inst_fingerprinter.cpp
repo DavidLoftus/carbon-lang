@@ -562,9 +562,9 @@ struct Worklist {
 
   auto Add(RealId real_id) -> void {
     const auto& real = sem_ir->reals().Get(real_id);
-    Add(real.mantissa);
-    Add(real.exponent);
-    store->AddInteger(real.is_decimal);
+    Add(real.mantissa());
+    store->AddInteger(real.exponent());
+    store->AddInteger(real.is_decimal());
   }
 
   auto Add(PackageNameId package_id) -> void {

@@ -9,6 +9,7 @@
 
 #include <string>
 
+#include "toolchain/base/real.h"
 #include "toolchain/base/value_ids.h"
 
 namespace Carbon::Testing {
@@ -18,12 +19,8 @@ using ::testing::Eq;
 using ::testing::Not;
 
 TEST(ValueStore, Real) {
-  Real real1{.mantissa = llvm::APInt(64, 1),
-             .exponent = llvm::APInt(64, 11),
-             .is_decimal = true};
-  Real real2{.mantissa = llvm::APInt(64, 2),
-             .exponent = llvm::APInt(64, 22),
-             .is_decimal = false};
+  Real real1(llvm::APInt(64, 1), llvm::APInt(64, 11), true);
+  Real real2(llvm::APInt(64, 2), llvm::APInt(64, 22), false);
 
   ValueStore<RealId, Real> reals;
   RealId id1 = reals.Add(real1);
@@ -34,14 +31,14 @@ TEST(ValueStore, Real) {
   EXPECT_THAT(id1, Not(Eq(id2)));
 
   const auto& real1_copy = reals.Get(id1);
-  EXPECT_THAT(real1.mantissa, Eq(real1_copy.mantissa));
-  EXPECT_THAT(real1.exponent, Eq(real1_copy.exponent));
-  EXPECT_THAT(real1.is_decimal, Eq(real1_copy.is_decimal));
+  EXPECT_THAT(real1.mantissa(), Eq(real1_copy.mantissa()));
+  EXPECT_THAT(real1.exponent(), Eq(real1_copy.exponent()));
+  EXPECT_THAT(real1.is_decimal(), Eq(real1_copy.is_decimal()));
 
   const auto& real2_copy = reals.Get(id2);
-  EXPECT_THAT(real2.mantissa, Eq(real2_copy.mantissa));
-  EXPECT_THAT(real2.exponent, Eq(real2_copy.exponent));
-  EXPECT_THAT(real2.is_decimal, Eq(real2_copy.is_decimal));
+  EXPECT_THAT(real2.mantissa(), Eq(real2_copy.mantissa()));
+  EXPECT_THAT(real2.exponent(), Eq(real2_copy.exponent()));
+  EXPECT_THAT(real2.is_decimal(), Eq(real2_copy.is_decimal()));
 }
 
 }  // namespace
