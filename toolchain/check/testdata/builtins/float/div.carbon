@@ -73,6 +73,7 @@ fn RuntimeCallIsValidBadReturnType(a: f64, b: f64) -> bool {
 library "[[@TEST_NAME]]";
 
 fn Literal() -> type = "float_literal.make_type";
+
 // CHECK:STDERR: fail_literal.carbon:[[@LINE+4]]:1: error: invalid signature for builtin function "float.div" [InvalidBuiltinSignature]
 // CHECK:STDERR: fn DivLiteral(a: Literal(), b: Literal()) -> Literal() = "float.div";
 // CHECK:STDERR: ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -441,6 +441,15 @@ static auto MakeFloatResult(Context& context, SemIR::TypeId type_id,
       Phase::Concrete);
 }
 
+// Converts a Real value into a ConstantId.
+static auto MakeFloatLiteralResult(Context& context, SemIR::TypeId type_id,
+                                   Real value) -> SemIR::ConstantId {
+  auto result = context.reals().Add(std::move(value));
+  return MakeConstantResult(
+      context, SemIR::FloatLiteralValue{.type_id = type_id, .real_id = result},
+      Phase::Concrete);
+}
+
 // Creates a FacetType constant.
 static auto MakeFacetTypeResult(Context& context,
                                 const SemIR::FacetTypeInfo& info, Phase phase)
@@ -2157,6 +2166,24 @@ static auto PerformBuiltinUnaryFloatOp(Context& context,
                                        SemIR::BuiltinFunctionKind builtin_kind,
                                        SemIR::InstId arg_id)
     -> SemIR::ConstantId {
+  if (auto literal =
+          context.insts().TryGetAs<SemIR::FloatLiteralValue>(arg_id)) {
+    auto real_val = context.sem_ir().reals().Get(literal->real_id);
+    switch (builtin_kind) {
+      case SemIR::BuiltinFunctionKind::FloatNegate:
+        real_val = -real_val;
+        break;
+      default:
+        CARBON_FATAL("Unexpected builtin kind");
+    }
+    auto new_real_id = context.sem_ir().reals().Add(std::move(real_val));
+    return MakeConstantResult(
+        context,
+        SemIR::FloatLiteralValue{.type_id = literal->type_id,
+                                 .real_id = new_real_id},
+        Phase::Concrete);
+  }
+
   auto op = context.insts().GetAs<SemIR::FloatValue>(arg_id);
   auto op_val = context.floats().Get(op.float_id);
 
@@ -2171,36 +2198,65 @@ static auto PerformBuiltinUnaryFloatOp(Context& context,
   return MakeFloatResult(context, op.type_id, std::move(op_val));
 }
 
+static auto ComputeBinaryRealOpResult(SemIR::BuiltinFunctionKind builtin_kind,
+                                      const Real& lhs, const Real& rhs)
+    -> Real {
+  switch (builtin_kind) {
+    case SemIR::BuiltinFunctionKind::FloatAdd:
+      return lhs + rhs;
+    case SemIR::BuiltinFunctionKind::FloatSub:
+      return lhs - rhs;
+    case SemIR::BuiltinFunctionKind::FloatMul:
+      return lhs * rhs;
+    default:
+      CARBON_FATAL("Unexpected builtin kind");
+  }
+}
+
+static auto ComputeBinaryFloatOpResult(SemIR::BuiltinFunctionKind builtin_kind,
+                                       const llvm::APFloat& lhs,
+                                       const llvm::APFloat& rhs)
+    -> llvm::APFloat {
+  switch (builtin_kind) {
+    case SemIR::BuiltinFunctionKind::FloatAdd:
+      return lhs + rhs;
+    case SemIR::BuiltinFunctionKind::FloatSub:
+      return lhs - rhs;
+    case SemIR::BuiltinFunctionKind::FloatMul:
+      return lhs * rhs;
+    case SemIR::BuiltinFunctionKind::FloatDiv:
+      return lhs / rhs;
+    default:
+      CARBON_FATAL("Unexpected builtin kind");
+  }
+}
+
 // Performs a builtin binary float -> float operation.
 static auto PerformBuiltinBinaryFloatOp(Context& context,
                                         SemIR::BuiltinFunctionKind builtin_kind,
                                         SemIR::InstId lhs_id,
                                         SemIR::InstId rhs_id)
     -> SemIR::ConstantId {
+  if (auto literal_lhs =
+          context.insts().TryGetAs<SemIR::FloatLiteralValue>(lhs_id)) {
+    auto literal_rhs = context.insts().GetAs<SemIR::FloatLiteralValue>(rhs_id);
+
+    auto lhs_real = context.sem_ir().reals().Get(literal_lhs->real_id);
+    auto rhs_real = context.sem_ir().reals().Get(literal_rhs.real_id);
+
+    Real result_real =
+        ComputeBinaryRealOpResult(builtin_kind, lhs_real, rhs_real);
+    return MakeFloatLiteralResult(context, literal_lhs->type_id,
+                                  std::move(result_real));
+  }
+
   auto lhs = context.insts().GetAs<SemIR::FloatValue>(lhs_id);
   auto rhs = context.insts().GetAs<SemIR::FloatValue>(rhs_id);
   auto lhs_val = context.floats().Get(lhs.float_id);
   auto rhs_val = context.floats().Get(rhs.float_id);
 
-  llvm::APFloat result_val(lhs_val.getSemantics());
-
-  switch (builtin_kind) {
-    case SemIR::BuiltinFunctionKind::FloatAdd:
-      result_val = lhs_val + rhs_val;
-      break;
-    case SemIR::BuiltinFunctionKind::FloatSub:
-      result_val = lhs_val - rhs_val;
-      break;
-    case SemIR::BuiltinFunctionKind::FloatMul:
-      result_val = lhs_val * rhs_val;
-      break;
-    case SemIR::BuiltinFunctionKind::FloatDiv:
-      result_val = lhs_val / rhs_val;
-      break;
-    default:
-      CARBON_FATAL("Unexpected operation kind.");
-  }
-
+  llvm::APFloat result_val =
+      ComputeBinaryFloatOpResult(builtin_kind, lhs_val, rhs_val);
   return MakeFloatResult(context, lhs.type_id, std::move(result_val));
 }
 

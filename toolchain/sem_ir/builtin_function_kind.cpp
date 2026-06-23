@@ -724,23 +724,20 @@ constexpr BuiltinInfo IntGreaterEq = {
     "int.greater_eq", ValidateSignature<auto(IntT, IntU)->Bool>};
 
 // "float.negate": float negation.
-constexpr BuiltinInfo FloatNegate = {
-    "float.negate", ValidateSignature<auto(SizedFloatT)->SizedFloatT>};
+constexpr BuiltinInfo FloatNegate = {"float.negate",
+                                     ValidateSignature<auto(FloatT)->FloatT>};
 
 // "float.add": float addition.
 constexpr BuiltinInfo FloatAdd = {
-    "float.add",
-    ValidateSignature<auto(SizedFloatT, SizedFloatT)->SizedFloatT>};
+    "float.add", ValidateSignature<auto(FloatT, FloatU)->FloatT>};
 
 // "float.sub": float subtraction.
 constexpr BuiltinInfo FloatSub = {
-    "float.sub",
-    ValidateSignature<auto(SizedFloatT, SizedFloatT)->SizedFloatT>};
+    "float.sub", ValidateSignature<auto(FloatT, FloatU)->FloatT>};
 
 // "float.mul": float multiplication.
 constexpr BuiltinInfo FloatMul = {
-    "float.mul",
-    ValidateSignature<auto(SizedFloatT, SizedFloatT)->SizedFloatT>};
+    "float.mul", ValidateSignature<auto(FloatT, FloatU)->FloatT>};
 
 // "float.div": float division.
 constexpr BuiltinInfo FloatDiv = {

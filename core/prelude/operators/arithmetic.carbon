@@ -5,7 +5,9 @@
 package Core library "prelude/operators/arithmetic";
 
 import library "prelude/types/char_literal";
+import library "prelude/types/float_literal";
 import library "prelude/types/int_literal";
+
 
 // TODO: Per the design, the associated type `Result` in each of these
 // interfaces should have a default value of `Self`:
@@ -135,4 +137,23 @@ impl CharLiteral as SubWith(IntLiteral) where .Result = CharLiteral {
 
 impl CharLiteral as SubWith(Self) where .Result = IntLiteral {
   fn Op(self, other: Self) -> IntLiteral = "char_literal.sub_char";
+}
+
+// Operations for FloatLiteral. These need to be here because FloatLiteral has
+// no associated library of its own.
+impl FloatLiteral as AddWith(Self) where .Result = Self {
+  fn Op(self, other: Self) -> Self = "float.add";
+}
+
+
+impl FloatLiteral as MulWith(Self) where .Result = Self {
+  fn Op(self, other: Self) -> Self = "float.mul";
+}
+
+impl FloatLiteral as Negate where .Result = Self {
+  fn Op(self) -> Self = "float.negate";
+}
+
+impl FloatLiteral as SubWith(Self) where .Result = Self {
+  fn Op(self, other: Self) -> Self = "float.sub";
 }
