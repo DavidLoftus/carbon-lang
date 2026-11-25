@@ -5,6 +5,8 @@
 #ifndef CARBON_TOOLCHAIN_CHECK_PENDING_BLOCK_H_
 #define CARBON_TOOLCHAIN_CHECK_PENDING_BLOCK_H_
 
+#include <utility>
+
 #include "llvm/ADT/SmallVector.h"
 #include "toolchain/check/context.h"
 #include "toolchain/check/control_flow.h"
@@ -37,6 +39,15 @@ class PendingBlock {
         : block_(block),
           size_(block ? block->insts_.size() : 0),
           cleanups_size_(block ? block->cleanups_.size() : 0) {}
+    DiscardUnusedInstsScope(const DiscardUnusedInstsScope&) = delete;
+    auto operator=(const DiscardUnusedInstsScope&)
+        -> DiscardUnusedInstsScope& = delete;
+    DiscardUnusedInstsScope(DiscardUnusedInstsScope&& other) noexcept
+        : block_(std::exchange(other.block_, nullptr)),
+          size_(other.size_),
+          cleanups_size_(other.cleanups_size_) {}
+    auto operator=(DiscardUnusedInstsScope&&)
+        -> DiscardUnusedInstsScope& = delete;
     ~DiscardUnusedInstsScope() {
       if (block_) {
         if (block_->insts_.size() > size_) {
