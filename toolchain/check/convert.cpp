@@ -446,13 +446,14 @@ static auto GetAggregateLiteralElements(Context& context,
 // necessary, `target_field_index` is the index, and `TargetAccessInstT` is the
 // kind of instruction used to access the destination element.
 template <typename SourceAccessInstT, typename TargetAccessInstT>
-static auto ConvertAggregateElement(
-    Context& context, SemIR::LocId loc_id, SemIR::InstId src_id,
+static auto PushConvertAggregateElement(
+    ConversionStack& stack, SemIR::LocId loc_id, SemIR::InstId src_id,
     SemIR::TypeInstId src_elem_type_inst, const LiteralElements& src_literal,
     ConversionTarget::Kind kind, SemIR::InstId target_id,
     SemIR::TypeInstId target_elem_type_inst, PendingBlock* target_block,
     llvm::MutableArrayRef<SemIR::InstId> template_storage_args,
-    size_t src_field_index, size_t target_field_index) -> SemIR::InstId {
+    size_t src_field_index, size_t target_field_index) -> void {
+  auto& context = stack.context();
   auto src_elem_type =
       context.types().GetTypeIdForTypeInstId(src_elem_type_inst);
   auto target_elem_type =
@@ -480,7 +481,8 @@ static auto ConvertAggregateElement(
   // have or need a target.
   ConversionTarget target = {.kind = kind, .type_id = target_elem_type};
   if (!target.is_initializer()) {
-    return Convert(context, loc_id, src_elem_id, target);
+    stack.PushConvert(loc_id, src_elem_id, target);
+    return;
   }
 
   // Compute the location of the target element and initialize it.
@@ -490,17 +492,108 @@ static auto ConvertAggregateElement(
       context, loc_id, target_id, target_elem_type, *target_block,
       target_field_index);
   target.template_storage_args = template_storage_args;
-  return Convert(context, loc_id, src_elem_id, target);
+  stack.Push([scope = std::move(scope)](SemIR::InstId result_id)
+                 -> std::optional<SemIR::InstId> { return result_id; });
+  stack.PushConvert(loc_id, src_elem_id, target);
+}
+
+template <typename SourceAccessInstT, typename TargetAccessInstT>
+static auto ConvertAggregateElement(
+    Context& context, SemIR::LocId loc_id, SemIR::InstId src_id,
+    SemIR::TypeInstId src_elem_type_inst, const LiteralElements& src_literal,
+    ConversionTarget::Kind kind, SemIR::InstId target_id,
+    SemIR::TypeInstId target_elem_type_inst, PendingBlock* target_block,
+    llvm::MutableArrayRef<SemIR::InstId> template_storage_args,
+    size_t src_field_index, size_t target_field_index) -> SemIR::InstId {
+  ConversionStack stack(context);
+  PushConvertAggregateElement<SourceAccessInstT, TargetAccessInstT>(
+      stack, loc_id, src_id, src_elem_type_inst, src_literal, kind, target_id,
+      target_elem_type_inst, target_block, template_storage_args,
+      src_field_index, target_field_index);
+  return stack.Run();
+}
+
+namespace {
+struct TupleToArrayState {
+  TupleToArrayState(Context& context, SemIR::LocId value_loc_id,
+                    SemIR::InstId value_id, SemIR::TupleType tuple_type,
+                    SemIR::ArrayType array_type, LiteralElements literal,
+                    ConversionTarget target)
+      : value_loc_id(value_loc_id),
+        value_id(value_id),
+        tuple_type(tuple_type),
+        array_type(array_type),
+        literal(literal),
+        target(target),
+        target_block_storage(&context),
+        target_block(target.storage_access_block ? target.storage_access_block
+                                                 : &target_block_storage),
+        return_slot_arg_id(target.storage_id) {}
+
+  SemIR::LocId value_loc_id;
+  SemIR::InstId value_id;
+  SemIR::TupleType tuple_type;
+  SemIR::ArrayType array_type;
+  LiteralElements literal;
+  ConversionTarget target;
+  PendingBlock target_block_storage;
+  PendingBlock* target_block;
+  SemIR::InstId return_slot_arg_id;
+  llvm::SmallVector<SemIR::InstId> inits;
+  size_t index = 0;
+};
+}  // namespace
+
+static auto StepTupleToArray(ConversionStack& stack,
+                             std::unique_ptr<TupleToArrayState> state,
+                             SemIR::InstId init_id)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
+  if (state->index > 0) {
+    if (init_id == SemIR::ErrorInst::InstId) {
+      return SemIR::ErrorInst::InstId;
+    }
+    state->inits.push_back(init_id);
+  }
+
+  auto tuple_elem_types =
+      context.inst_blocks().Get(state->tuple_type.type_elements_id);
+  if (state->index < tuple_elem_types.size()) {
+    auto i = state->index++;
+    auto src_type_inst_id =
+        context.types().GetAsTypeInstId(tuple_elem_types[i]);
+    auto* s = state.get();
+    stack.Push(
+        [&stack, state = std::move(state)](SemIR::InstId init_id) mutable {
+          return StepTupleToArray(stack, std::move(state), init_id);
+        });
+    PushConvertAggregateElement<SemIR::TupleAccess, SemIR::ArrayIndex>(
+        stack, s->value_loc_id, s->value_id, src_type_inst_id, s->literal,
+        ConversionTarget::InPlaceInitializing, s->return_slot_arg_id,
+        s->array_type.element_type_inst_id, s->target_block,
+        s->target.template_storage_args, i, i);
+    return std::nullopt;
+  }
+
+  // Flush the temporary here if we didn't insert it earlier, so we can add a
+  // reference to the return slot.
+  state->target_block->InsertHere();
+  return AddInst<SemIR::ArrayInit>(
+      context, state->value_loc_id,
+      {.type_id = state->target.type_id,
+       .inits_id = context.inst_blocks().Add(state->inits),
+       .dest_id = state->return_slot_arg_id});
 }
 
 // Performs a conversion from a tuple to an array type. This function only
 // converts the type, and does not perform a final conversion to the requested
 // expression category.
-static auto ConvertTupleToArray(Context& context, SemIR::LocId loc_id,
+static auto ConvertTupleToArray(ConversionStack& stack, SemIR::LocId loc_id,
                                 SemIR::TupleType tuple_type,
                                 SemIR::ArrayType array_type,
                                 SemIR::InstId value_id, ConversionTarget target)
-    -> SemIR::InstId {
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto& sem_ir = context.sem_ir();
   auto tuple_elem_types = sem_ir.inst_blocks().Get(tuple_type.type_elements_id);
 
@@ -548,48 +641,23 @@ static auto ConvertTupleToArray(Context& context, SemIR::LocId loc_id,
     return SemIR::ErrorInst::InstId;
   }
 
-  PendingBlock target_block_storage(&context);
-  PendingBlock* target_block = target.storage_access_block
-                                   ? target.storage_access_block
-                                   : &target_block_storage;
+  auto state = std::make_unique<TupleToArrayState>(
+      context, value_loc_id, value_id, tuple_type, array_type, literal, target);
 
   // Arrays are always initialized in-place. Allocate a temporary as the
   // destination for the array initialization if we weren't given one.
-  SemIR::InstId return_slot_arg_id = target.storage_id;
   if (!target.storage_id.has_value()) {
-    return_slot_arg_id = target_block->AddInst<SemIR::TemporaryStorage>(
-        value_loc_id, {.type_id = target.type_id});
+    state->return_slot_arg_id =
+        state->target_block->AddInst<SemIR::TemporaryStorage>(
+            value_loc_id, {.type_id = target.type_id});
   }
 
   // Initialize each element of the array from the corresponding element of the
   // tuple.
   // TODO: Annotate diagnostics coming from here with the array element index,
   // if initializing from a tuple literal.
-  llvm::SmallVector<SemIR::InstId> inits;
-  inits.reserve(*array_bound + 1);
-  for (auto [i, src_type_inst_id] : llvm::enumerate(
-           context.types().GetBlockAsTypeInstIds(tuple_elem_types))) {
-    // TODO: This call recurses back into conversion. Switch to an iterative
-    // approach.
-    auto init_id =
-        ConvertAggregateElement<SemIR::TupleAccess, SemIR::ArrayIndex>(
-            context, value_loc_id, value_id, src_type_inst_id, literal,
-            ConversionTarget::InPlaceInitializing, return_slot_arg_id,
-            array_type.element_type_inst_id, target_block,
-            target.template_storage_args, i, i);
-    if (init_id == SemIR::ErrorInst::InstId) {
-      return SemIR::ErrorInst::InstId;
-    }
-    inits.push_back(init_id);
-  }
-
-  // Flush the temporary here if we didn't insert it earlier, so we can add a
-  // reference to the return slot.
-  target_block->InsertHere();
-  return AddInst<SemIR::ArrayInit>(context, value_loc_id,
-                                   {.type_id = target.type_id,
-                                    .inits_id = sem_ir.inst_blocks().Add(inits),
-                                    .dest_id = return_slot_arg_id});
+  state->inits.reserve(*array_bound + 1);
+  return StepTupleToArray(stack, std::move(state), SemIR::InstId::None);
 }
 
 // Performs a conversion from a function to a C++ function pointer type.
@@ -609,14 +677,94 @@ static auto ConvertFunctionToCppPointer(
        .function_id = src_type.function_id});
 }
 
+namespace {
+struct TupleToTupleState {
+  TupleToTupleState(SemIR::File& sem_ir, SemIR::LocId value_loc_id,
+                    SemIR::InstId value_id, SemIR::TupleType src_type,
+                    SemIR::TupleType dest_type, LiteralElements literal,
+                    ConversionTarget target, ConversionTarget::Kind inner_kind,
+                    size_t num_elems)
+      : value_loc_id(value_loc_id),
+        value_id(value_id),
+        src_type(src_type),
+        dest_type(dest_type),
+        literal(literal),
+        target(target),
+        inner_kind(inner_kind),
+        new_block(
+            literal.elems_id.has_value()
+                ? SemIR::CopyOnWriteInstBlock(&sem_ir, literal.elems_id)
+                : SemIR::CopyOnWriteInstBlock(
+                      &sem_ir, SemIR::CopyOnWriteInstBlock::UninitializedBlock{
+                                   num_elems})) {}
+
+  SemIR::LocId value_loc_id;
+  SemIR::InstId value_id;
+  SemIR::TupleType src_type;
+  SemIR::TupleType dest_type;
+  LiteralElements literal;
+  ConversionTarget target;
+  ConversionTarget::Kind inner_kind;
+  SemIR::CopyOnWriteInstBlock new_block;
+  size_t index = 0;
+};
+}  // namespace
+
+static auto StepTupleToTuple(ConversionStack& stack,
+                             std::unique_ptr<TupleToTupleState> state,
+                             SemIR::InstId init_id)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
+  if (state->index > 0) {
+    if (init_id == SemIR::ErrorInst::InstId) {
+      return SemIR::ErrorInst::InstId;
+    }
+    state->new_block.Set(state->index - 1, init_id);
+  }
+
+  auto src_elem_types =
+      context.inst_blocks().Get(state->src_type.type_elements_id);
+  if (state->index < src_elem_types.size()) {
+    auto dest_elem_types =
+        context.inst_blocks().Get(state->dest_type.type_elements_id);
+    auto i = state->index++;
+    auto src_type_inst_id = context.types().GetAsTypeInstId(src_elem_types[i]);
+    auto dest_type_inst_id =
+        context.types().GetAsTypeInstId(dest_elem_types[i]);
+    auto* s = state.get();
+    stack.Push(
+        [&stack, state = std::move(state)](SemIR::InstId init_id) mutable {
+          return StepTupleToTuple(stack, std::move(state), init_id);
+        });
+    PushConvertAggregateElement<SemIR::TupleAccess, SemIR::TupleAccess>(
+        stack, s->value_loc_id, s->value_id, src_type_inst_id, s->literal,
+        s->inner_kind, s->target.storage_id, dest_type_inst_id,
+        s->target.storage_access_block, s->target.template_storage_args, i, i);
+    return std::nullopt;
+  }
+
+  if (state->target.is_initializer()) {
+    state->target.storage_access_block->InsertHere();
+    return AddInst<SemIR::TupleInit>(context, state->value_loc_id,
+                                     {.type_id = state->target.type_id,
+                                      .elements_id = state->new_block.id(),
+                                      .dest_id = state->target.storage_id});
+  } else {
+    return AddInst<SemIR::TupleValue>(context, state->value_loc_id,
+                                      {.type_id = state->target.type_id,
+                                       .elements_id = state->new_block.id()});
+  }
+}
+
 // Performs a conversion from a tuple to a tuple type. This function only
 // converts the type, and does not perform a final conversion to the requested
 // expression category.
-static auto ConvertTupleToTuple(Context& context, SemIR::LocId loc_id,
+static auto ConvertTupleToTuple(ConversionStack& stack, SemIR::LocId loc_id,
                                 SemIR::TupleType src_type,
                                 SemIR::TupleType dest_type,
                                 SemIR::InstId value_id, ConversionTarget target)
-    -> SemIR::InstId {
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto& sem_ir = context.sem_ir();
   auto src_elem_types = sem_ir.inst_blocks().Get(src_type.type_elements_id);
   auto dest_elem_types = sem_ir.inst_blocks().Get(dest_type.type_elements_id);
@@ -652,39 +800,10 @@ static auto ConvertTupleToTuple(Context& context, SemIR::LocId loc_id,
   // Initialize each element of the destination from the corresponding element
   // of the source.
   // TODO: Annotate diagnostics coming from here with the element index.
-  auto new_block =
-      literal.elems_id.has_value()
-          ? SemIR::CopyOnWriteInstBlock(&sem_ir, literal.elems_id)
-          : SemIR::CopyOnWriteInstBlock(
-                &sem_ir, SemIR::CopyOnWriteInstBlock::UninitializedBlock{
-                             src_elem_types.size()});
-  for (auto [i, src_type_inst_id, dest_type_inst_id] : llvm::enumerate(
-           context.types().GetBlockAsTypeInstIds(src_elem_types),
-           context.types().GetBlockAsTypeInstIds(dest_elem_types))) {
-    // TODO: This call recurses back into conversion. Switch to an iterative
-    // approach.
-    auto init_id =
-        ConvertAggregateElement<SemIR::TupleAccess, SemIR::TupleAccess>(
-            context, value_loc_id, value_id, src_type_inst_id, literal,
-            inner_kind, target.storage_id, dest_type_inst_id,
-            target.storage_access_block, target.template_storage_args, i, i);
-    if (init_id == SemIR::ErrorInst::InstId) {
-      return SemIR::ErrorInst::InstId;
-    }
-    new_block.Set(i, init_id);
-  }
-
-  if (target.is_initializer()) {
-    target.storage_access_block->InsertHere();
-    return AddInst<SemIR::TupleInit>(context, value_loc_id,
-                                     {.type_id = target.type_id,
-                                      .elements_id = new_block.id(),
-                                      .dest_id = target.storage_id});
-  } else {
-    return AddInst<SemIR::TupleValue>(
-        context, value_loc_id,
-        {.type_id = target.type_id, .elements_id = new_block.id()});
-  }
+  auto state = std::make_unique<TupleToTupleState>(
+      sem_ir, value_loc_id, value_id, src_type, dest_type, literal, target,
+      inner_kind, src_elem_types.size());
+  return StepTupleToTuple(stack, std::move(state), SemIR::InstId::None);
 }
 
 // Converts a tuple of elements that are convertible to `type` into a `type`
@@ -1755,7 +1874,7 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
   if (auto target_tuple_type = target_type_inst.TryAs<SemIR::TupleType>()) {
     if (auto src_tuple_type =
             sem_ir.types().TryGetAs<SemIR::TupleType>(value_type_id)) {
-      return ConvertTupleToTuple(context, loc_id, *src_tuple_type,
+      return ConvertTupleToTuple(stack, loc_id, *src_tuple_type,
                                  *target_tuple_type, value_id, target);
     }
   }
@@ -1785,7 +1904,7 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
           sem_ir.types().TryGetAs<SemIR::TupleType>(value_type_id)) {
     if (auto target_array_type =
             TryGetAsArrayType(context, loc_id, target.type_id)) {
-      return ConvertTupleToArray(context, loc_id, *src_tuple_type,
+      return ConvertTupleToArray(stack, loc_id, *src_tuple_type,
                                  *target_array_type, value_id, target);
     }
   }
