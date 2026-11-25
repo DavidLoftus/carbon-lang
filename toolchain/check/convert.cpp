@@ -46,10 +46,6 @@
 #include "toolchain/sem_ir/type_info.h"
 #include "toolchain/sem_ir/typed_insts.h"
 
-// TODO: This contains a lot of recursion. Consider removing it in order to
-// prevent accidents.
-// NOLINTBEGIN(misc-no-recursion)
-
 namespace Carbon::Check {
 
 namespace {
@@ -65,6 +61,9 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
 static auto ConvertStep(ConversionStack& stack, SemIR::LocId loc_id,
                         SemIR::InstId expr_id, ConversionTarget target)
     -> std::optional<SemIR::InstId>;
+static auto FinishExprAsType(Context& context, SemIR::LocId loc_id,
+                             SemIR::InstId type_as_inst_id, bool diagnose)
+    -> TypeExpr;
 
 namespace {
 // An iterative worklist stack for executing conversions without C++ call-stack
@@ -790,12 +789,72 @@ static auto ConvertTupleToTuple(ConversionStack& stack, SemIR::LocId loc_id,
   return StepTupleToTuple(stack, std::move(state), SemIR::InstId::None);
 }
 
+namespace {
+struct TupleToTypeState {
+  SemIR::LocId loc_id;
+  SemIR::InstId value_id;
+  SemIR::InstBlockId elements_id;
+  bool is_tuple_value;
+  bool diagnose;
+  llvm::SmallVector<SemIR::InstId> type_inst_ids;
+  size_t index = 0;
+};
+}  // namespace
+
+static auto StepTupleToType(ConversionStack& stack,
+                            std::unique_ptr<TupleToTypeState> state,
+                            SemIR::InstId type_as_inst_id)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
+  if (state->index > 0) {
+    state->type_inst_ids.push_back(FinishExprAsType(context, state->loc_id,
+                                                    type_as_inst_id,
+                                                    state->diagnose)
+                                       .inst_id);
+  }
+
+  auto elements = context.inst_blocks().Get(state->elements_id);
+  if (state->index < elements.size()) {
+    auto i = state->index++;
+    auto elem_id = SemIR::InstId::None;
+    if (state->is_tuple_value) {
+      elem_id = elements[i];
+    } else {
+      auto type_id = context.types().GetTypeIdForTypeInstId(
+          context.types().GetAsTypeInstId(elements[i]));
+      elem_id =
+          GetOrAddInst<SemIR::TupleAccess>(context, state->loc_id,
+                                           {.type_id = type_id,
+                                            .tuple_id = state->value_id,
+                                            .index = SemIR::ElementIndex(i)});
+    }
+    auto loc_id = state->loc_id;
+    auto diagnose = state->diagnose;
+    stack.Push([&stack, state = std::move(state)](
+                   SemIR::InstId type_as_inst_id) mutable {
+      return StepTupleToType(stack, std::move(state), type_as_inst_id);
+    });
+    stack.PushConvert(loc_id, elem_id,
+                      {.kind = ConversionTarget::Value,
+                       .type_id = SemIR::TypeType::TypeId,
+                       .diagnose = diagnose});
+    return std::nullopt;
+  }
+
+  // TODO: Should we add this as an instruction? It will contain
+  // references to local InstIds.
+  auto tuple_type_id = GetTupleType(context, state->type_inst_ids);
+  return context.types().GetTypeInstId(tuple_type_id);
+}
+
 // Converts a tuple of elements that are convertible to `type` into a `type`
 // that is a tuple of types.
-static auto ConvertTupleToType(Context& context, SemIR::LocId loc_id,
+static auto ConvertTupleToType(ConversionStack& stack, SemIR::LocId loc_id,
                                SemIR::InstId value_id,
                                SemIR::TypeId value_type_id,
-                               ConversionTarget target) -> SemIR::TypeInstId {
+                               ConversionTarget target)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto value_const_id = context.constant_values().Get(value_id);
   if (value_const_id == SemIR::ErrorInst::ConstantId) {
     return SemIR::ErrorInst::TypeInstId;
@@ -806,18 +865,13 @@ static auto ConvertTupleToType(Context& context, SemIR::LocId loc_id,
     return SemIR::TypeInstId::None;
   }
 
-  llvm::SmallVector<SemIR::InstId> type_inst_ids;
-
+  auto elements_id = SemIR::InstBlockId::None;
+  bool is_tuple_value = false;
   if (auto tuple_value =
           context.constant_values().TryGetInstAs<SemIR::TupleValue>(
               value_const_id)) {
-    for (auto tuple_inst_id :
-         context.inst_blocks().Get(tuple_value->elements_id)) {
-      // TODO: This call recurses back into conversion. Switch to an
-      // iterative approach.
-      type_inst_ids.push_back(
-          ExprAsType(context, loc_id, tuple_inst_id, target.diagnose).inst_id);
-    }
+    elements_id = tuple_value->elements_id;
+    is_tuple_value = true;
   } else {
     // A value of type TupleType that isn't a TupleValue must be a symbolic
     // binding.
@@ -826,25 +880,18 @@ static auto ConvertTupleToType(Context& context, SemIR::LocId loc_id,
     // Form a TupleAccess for each element in the symbolic value, which is then
     // converted to a `type` or diagnosed as an error.
     auto tuple_type = context.types().GetAs<SemIR::TupleType>(value_type_id);
-    auto type_elements = context.types().GetBlockAsTypeIds(
-        context.inst_blocks().Get(tuple_type.type_elements_id));
-    for (auto [i, type_id] : llvm::enumerate(type_elements)) {
-      auto access_inst_id =
-          GetOrAddInst<SemIR::TupleAccess>(context, loc_id,
-                                           {.type_id = type_id,
-                                            .tuple_id = value_id,
-                                            .index = SemIR::ElementIndex(i)});
-      // TODO: This call recurses back into conversion. Switch to an
-      // iterative approach.
-      type_inst_ids.push_back(
-          ExprAsType(context, loc_id, access_inst_id, target.diagnose).inst_id);
-    }
+    elements_id = tuple_type.type_elements_id;
   }
 
-  // TODO: Should we add this as an instruction? It will contain
-  // references to local InstIds.
-  auto tuple_type_id = GetTupleType(context, type_inst_ids);
-  return context.types().GetTypeInstId(tuple_type_id);
+  auto state = std::make_unique<TupleToTypeState>(TupleToTypeState{
+      .loc_id = loc_id,
+      .value_id = value_id,
+      .elements_id = elements_id,
+      .is_tuple_value = is_tuple_value,
+      .diagnose = target.diagnose,
+  });
+
+  return StepTupleToType(stack, std::move(state), SemIR::InstId::None);
 }
 
 // Create a reference to the vtable pointer for a class. Returns None if the
@@ -2103,12 +2150,25 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
   }
 
   if (sem_ir.types().Is<SemIR::FacetType>(target.type_id)) {
-    auto type_value_id = SemIR::TypeInstId::None;
+    auto type_value_id = SemIR::InstId::None;
 
     // A tuple of types converts to type `type`.
     if (sem_ir.types().Is<SemIR::TupleType>(value_type_id)) {
-      type_value_id =
-          ConvertTupleToType(context, loc_id, value_id, value_type_id, target);
+      size_t base_depth = stack.depth();
+      auto result =
+          ConvertTupleToType(stack, loc_id, value_id, value_type_id, target);
+      if (!result) {
+        if (target.type_id != SemIR::TypeType::TypeId) {
+          // Use the converted `TypeType` value for converting to a facet.
+          stack.InsertAt(base_depth,
+                         [&stack, loc_id, target](SemIR::InstId type_value_id) {
+                           return PerformBuiltinConversionStep(
+                               stack, loc_id, type_value_id, target);
+                         });
+        }
+        return std::nullopt;
+      }
+      type_value_id = *result;
     }
 
     // `{}` converts to `{} as type`.
@@ -3155,10 +3215,9 @@ static auto DiagnoseTypeExprEvaluationFailure(Context& context,
   context.emitter().Emit(loc_id, TypeExprEvaluationFailure);
 }
 
-auto ExprAsType(Context& context, SemIR::LocId loc_id, SemIR::InstId value_id,
-                bool diagnose) -> TypeExpr {
-  auto type_as_inst_id = ConvertToValueOfType(
-      context, loc_id, value_id, SemIR::TypeType::TypeId, diagnose);
+static auto FinishExprAsType(Context& context, SemIR::LocId loc_id,
+                             SemIR::InstId type_as_inst_id, bool diagnose)
+    -> TypeExpr {
   if (type_as_inst_id == SemIR::ErrorInst::InstId) {
     return {.inst_id = SemIR::ErrorInst::TypeInstId,
             .type_id = SemIR::ErrorInst::TypeId};
@@ -3176,6 +3235,13 @@ auto ExprAsType(Context& context, SemIR::LocId loc_id, SemIR::InstId value_id,
   return {
       .inst_id = context.types().GetAsTypeInstId(type_as_inst_id),
       .type_id = context.types().GetTypeIdForTypeConstantId(type_as_const_id)};
+}
+
+auto ExprAsType(Context& context, SemIR::LocId loc_id, SemIR::InstId value_id,
+                bool diagnose) -> TypeExpr {
+  auto type_as_inst_id = ConvertToValueOfType(
+      context, loc_id, value_id, SemIR::TypeType::TypeId, diagnose);
+  return FinishExprAsType(context, loc_id, type_as_inst_id, diagnose);
 }
 
 auto FormExprAsForm(Context& context, SemIR::LocId loc_id,
@@ -3305,5 +3371,3 @@ auto UnsafeUndoConvert(Context& context, SemIR::LocId loc_id,
 }
 
 }  // namespace Carbon::Check
-
-// NOLINTEND(misc-no-recursion)
