@@ -4,12 +4,14 @@
 
 #include "toolchain/check/convert.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
 #include "common/check.h"
 #include "common/map.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "toolchain/base/kind_switch.h"
 #include "toolchain/check/action.h"
@@ -51,6 +53,92 @@
 namespace Carbon::Check {
 
 namespace {
+// Forward declaration for step functions below.
+class ConversionStack;
+}  // namespace
+
+static auto PerformBuiltinConversionStep(ConversionStack& stack,
+                                         SemIR::LocId loc_id,
+                                         SemIR::InstId value_id,
+                                         ConversionTarget target)
+    -> std::optional<SemIR::InstId>;
+static auto ConvertStep(ConversionStack& stack, SemIR::LocId loc_id,
+                        SemIR::InstId expr_id, ConversionTarget target)
+    -> std::optional<SemIR::InstId>;
+
+namespace {
+// An iterative worklist stack for executing conversions without C++ call-stack
+// recursion.
+//
+// Each step on the stack receives the `SemIR::InstId` result produced by the
+// immediately preceding step (or `InstId::None` if none) and returns either:
+// - a `SemIR::InstId` to pass as the result to the next step down the stack, or
+// - `std::nullopt` if it pushed sub-conversion steps onto the stack to run
+//   before producing its result.
+class ConversionStack {
+ public:
+  using Step =
+      llvm::unique_function<auto(SemIR::InstId)->std::optional<SemIR::InstId>>;
+
+  explicit ConversionStack(Context& context) : context_(context) {}
+
+  auto context() -> Context& { return context_; }
+  auto depth() const -> size_t { return steps_.size(); }
+
+  // Pushes a step onto the top of the stack to execute next.
+  auto Push(Step step) -> void { steps_.push_back(std::move(step)); }
+
+  // Inserts a continuation step at `index` (below any steps pushed since
+  // `depth()` was `index`).
+  auto InsertAt(size_t index, Step step) -> void {
+    steps_.insert(steps_.begin() + index, std::move(step));
+  }
+
+  // Pushes a `ConvertStep` onto the stack.
+  auto PushConvert(SemIR::LocId loc_id, SemIR::InstId expr_id,
+                   ConversionTarget target) -> void {
+    Push([this, loc_id, expr_id, target](SemIR::InstId /*prev_result_id*/) {
+      return ConvertStep(*this, loc_id, expr_id, target);
+    });
+  }
+
+  // Pushes a `PerformBuiltinConversionStep` onto the stack.
+  auto PushBuiltinConversion(SemIR::LocId loc_id, SemIR::InstId value_id,
+                             ConversionTarget target) -> void {
+    Push([this, loc_id, value_id, target](SemIR::InstId /*prev_result_id*/) {
+      return PerformBuiltinConversionStep(*this, loc_id, value_id, target);
+    });
+  }
+
+  // Runs all steps on the stack until empty and returns the final result.
+  auto Run() -> SemIR::InstId {
+    auto result_id = SemIR::InstId::None;
+    while (!steps_.empty()) {
+      auto step = steps_.pop_back_val();
+      if (auto step_result = step(result_id)) {
+        result_id = *step_result;
+      } else {
+        result_id = SemIR::InstId::None;
+      }
+    }
+    return result_id;
+  }
+
+ private:
+  Context& context_;
+  llvm::SmallVector<Step, 8> steps_;
+};
+
+// Allocates a `Diagnostics::ContextScope` at a stable address so it can live
+// across suspended `ConversionStack` steps without invalidating the emitter's
+// `function_ref`.
+template <typename LocT, typename ContextFn>
+auto MakeUniqueContextScope(Diagnostics::Emitter<LocT>* emitter,
+                            ContextFn context_fn) {
+  return std::make_unique<Diagnostics::ContextScope<LocT, ContextFn>>(
+      emitter, std::move(context_fn));
+}
+
 // Information about the kind of instruction referred to by a storage argument.
 struct StorageArgKind {
   enum Kind { Temporary, Splice, Other };
@@ -1396,9 +1484,12 @@ static auto DiagnoseConversionFailureToConstraintValue(
   }
 }
 
-static auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
-                                     SemIR::InstId value_id,
-                                     ConversionTarget target) -> SemIR::InstId {
+static auto PerformBuiltinConversionStep(ConversionStack& stack,
+                                         SemIR::LocId loc_id,
+                                         SemIR::InstId value_id,
+                                         ConversionTarget target)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto& sem_ir = context.sem_ir();
   auto value = sem_ir.insts().Get(value_id);
   auto value_type_id = value.type_id();
@@ -1492,31 +1583,35 @@ static auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
                          .source_id = target.storage_id});
       }
 
-      {
-        // While the types are the same, the conversion can still fail if it
-        // performs a copy while converting the value to another category, and
-        // the type (or some part of it) is not copyable.
-        Diagnostics::ContextScope diagnostic_context(
-            &context.emitter(), [&](auto& builder) {
-              CARBON_DIAGNOSTIC_LABEL(InCopy, "in copy of {0}", TypeOfInstId);
-              builder.Attach(value_id, InCopy, value_id);
-            });
+      // While the types are the same, the conversion can still fail if it
+      // performs a copy while converting the value to another category, and
+      // the type (or some part of it) is not copyable.
+      auto diagnostic_context =
+          MakeUniqueContextScope(&context.emitter(), [value_id](auto& builder) {
+            CARBON_DIAGNOSTIC_LABEL(InCopy, "in copy of {0}", TypeOfInstId);
+            builder.Attach(value_id, InCopy, value_id);
+          });
 
-        foundation_value_id = PerformBuiltinConversion(
-            context, loc_id, foundation_value_id,
-            {.kind = target.kind,
-             .type_id = foundation_type_id,
-             .storage_id = foundation_init_id,
-             .storage_access_block = target.storage_access_block,
-             .diagnose = target.diagnose});
+      stack.Push([&context, loc_id, target_type_id = target.type_id,
+                  diagnostic_context = std::move(diagnostic_context)](
+                     SemIR::InstId foundation_value_id) mutable
+                     -> std::optional<SemIR::InstId> {
+        diagnostic_context.reset();
         if (foundation_value_id == SemIR::ErrorInst::InstId) {
           return SemIR::ErrorInst::InstId;
         }
-      }
-
-      return AddInst<SemIR::AsCompatible>(
-          context, loc_id,
-          {.type_id = target.type_id, .source_id = foundation_value_id});
+        return AddInst<SemIR::AsCompatible>(
+            context, loc_id,
+            {.type_id = target_type_id, .source_id = foundation_value_id});
+      });
+      stack.PushBuiltinConversion(
+          loc_id, foundation_value_id,
+          {.kind = target.kind,
+           .type_id = foundation_type_id,
+           .storage_id = foundation_init_id,
+           .storage_access_block = target.storage_access_block,
+           .diagnose = target.diagnose});
+      return std::nullopt;
     }
   }
 
@@ -1545,71 +1640,81 @@ static auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
       auto removed_quals = value_quals & ~target_quals;
       if (CanAddQualifiers(added_quals, category) &&
           CanRemoveQualifiers(removed_quals, category, target.kind)) {
+        auto finish =
+            [&context, loc_id, value_type_id, target, category, removed_quals,
+             inheritance_path = std::move(inheritance_path)](
+                SemIR::InstId value_id) -> std::optional<SemIR::InstId> {
+          // `MaybeUnformed(T)` might have a pointer value representation when
+          // `T` does not, so convert as needed when removing `MaybeUnformed`.
+          bool need_value_binding = false;
+          if ((removed_quals & SemIR::TypeQualifiers::MaybeUnformed) !=
+                  SemIR::TypeQualifiers::None &&
+              category == SemIR::ExprCategory::Value) {
+            auto value_rep =
+                SemIR::ValueRepr::ForType(context.sem_ir(), value_type_id);
+            auto unformed_value_rep =
+                SemIR::ValueRepr::ForType(context.sem_ir(), target.type_id);
+            if (value_rep.kind != unformed_value_rep.kind) {
+              CARBON_CHECK(unformed_value_rep.kind ==
+                           SemIR::ValueRepr::Pointer);
+              value_id = AddInst<SemIR::ValueAsRef>(
+                  context, loc_id,
+                  {.type_id = value_type_id, .value_id = value_id});
+              need_value_binding = true;
+            }
+          }
+
+          if ((removed_quals & SemIR::TypeQualifiers::Partial) !=
+                  SemIR::TypeQualifiers::None &&
+              SemIR::IsInitializerCategory(category)) {
+            auto unqual_target_type_id =
+                context.types().GetUnqualifiedType(target.type_id);
+            if (auto target_class_type =
+                    context.types().TryGetAs<SemIR::ClassType>(
+                        unqual_target_type_id)) {
+              value_id = ConvertPartialInitializerToNonPartial(
+                  context, GetInstLocationOrFallback(context, value_id, loc_id),
+                  target, *target_class_type, value_id);
+            }
+          }
+
+          // An expression of type T converts to U if T is a class derived from
+          // U. First navigate to the base subobject. This preserves qualifiers.
+          if (inheritance_path) {
+            value_id = ConvertDerivedToBase(context, loc_id, value_id,
+                                            *inheritance_path);
+          }
+
+          // Next, switch out the qualifiers for those of the target.
+          if (context.insts().Get(value_id).type_id() != target.type_id) {
+            value_id = AddInst<SemIR::AsCompatible>(
+                context, loc_id,
+                {.type_id = target.type_id, .source_id = value_id});
+          }
+
+          // Finally, add a value acquisition to get back to a value expression
+          // if we temporarily converted to a reference earlier.
+          if (need_value_binding) {
+            value_id = AddInst<SemIR::AcquireValue>(
+                context, loc_id,
+                {.type_id = target.type_id, .value_id = value_id});
+          }
+
+          return value_id;
+        };
+
         // For a struct or tuple literal, perform a category conversion if
         // necessary.
         if (category == SemIR::ExprCategory::Mixed) {
-          value_id = PerformBuiltinConversion(context, loc_id, value_id,
-                                              {.kind = ConversionTarget::Value,
-                                               .type_id = value_type_id,
-                                               .diagnose = target.diagnose});
+          stack.Push(std::move(finish));
+          stack.PushBuiltinConversion(loc_id, value_id,
+                                      {.kind = ConversionTarget::Value,
+                                       .type_id = value_type_id,
+                                       .diagnose = target.diagnose});
+          return std::nullopt;
         }
 
-        // `MaybeUnformed(T)` might have a pointer value representation when `T`
-        // does not, so convert as needed when removing `MaybeUnformed`.
-        bool need_value_binding = false;
-        if ((removed_quals & SemIR::TypeQualifiers::MaybeUnformed) !=
-                SemIR::TypeQualifiers::None &&
-            category == SemIR::ExprCategory::Value) {
-          auto value_rep =
-              SemIR::ValueRepr::ForType(context.sem_ir(), value_type_id);
-          auto unformed_value_rep =
-              SemIR::ValueRepr::ForType(context.sem_ir(), target.type_id);
-          if (value_rep.kind != unformed_value_rep.kind) {
-            CARBON_CHECK(unformed_value_rep.kind == SemIR::ValueRepr::Pointer);
-            value_id = AddInst<SemIR::ValueAsRef>(
-                context, loc_id,
-                {.type_id = value_type_id, .value_id = value_id});
-            need_value_binding = true;
-          }
-        }
-
-        if ((removed_quals & SemIR::TypeQualifiers::Partial) !=
-                SemIR::TypeQualifiers::None &&
-            SemIR::IsInitializerCategory(category)) {
-          auto unqual_target_type_id =
-              context.types().GetUnqualifiedType(target.type_id);
-          if (auto target_class_type =
-                  context.types().TryGetAs<SemIR::ClassType>(
-                      unqual_target_type_id)) {
-            value_id = ConvertPartialInitializerToNonPartial(
-                context, GetInstLocationOrFallback(context, value_id, loc_id),
-                target, *target_class_type, value_id);
-          }
-        }
-
-        // An expression of type T converts to U if T is a class derived from U.
-        // First navigate to the base subobject. This preserves qualifiers.
-        if (inheritance_path) {
-          value_id = ConvertDerivedToBase(context, loc_id, value_id,
-                                          *inheritance_path);
-        }
-
-        // Next, switch out the qualifiers for those of the target.
-        if (context.insts().Get(value_id).type_id() != target.type_id) {
-          value_id = AddInst<SemIR::AsCompatible>(
-              context, loc_id,
-              {.type_id = target.type_id, .source_id = value_id});
-        }
-
-        // Finally, add a value acquisition to get back to a value expression if
-        // we temporarily converted to a reference earlier.
-        if (need_value_binding) {
-          value_id = AddInst<SemIR::AcquireValue>(
-              context, loc_id,
-              {.type_id = target.type_id, .value_id = value_id});
-        }
-
-        return value_id;
+        return finish(value_id);
       } else {
         // TODO: Produce a custom diagnostic explaining that we can't perform
         // this conversion due to the change in qualifiers and/or the expression
@@ -1859,6 +1964,17 @@ static auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
 
   // No builtin conversion applies.
   return value_id;
+}
+
+static auto PerformBuiltinConversion(Context& context, SemIR::LocId loc_id,
+                                     SemIR::InstId value_id,
+                                     ConversionTarget target) -> SemIR::InstId {
+  ConversionStack stack(context);
+  if (auto result =
+          PerformBuiltinConversionStep(stack, loc_id, value_id, target)) {
+    return *result;
+  }
+  return stack.Run();
 }
 
 // Given a value expression, form a corresponding initializer that copies from
@@ -2474,8 +2590,47 @@ static auto ConversionNeedsCompleteTarget(Context& context,
   return true;
 }
 
-auto Convert(Context& context, SemIR::LocId loc_id, SemIR::InstId expr_id,
-             ConversionTarget target) -> SemIR::InstId {
+static auto FinishConvert(Context& context, SemIR::LocId loc_id,
+                          SemIR::InstId orig_expr_id,
+                          SemIR::InstId original_inner_expr_id,
+                          SemIR::InstId expr_id, ConversionTarget target)
+    -> SemIR::InstId {
+  if (expr_id == SemIR::ErrorInst::InstId) {
+    return expr_id;
+  }
+
+  // Defer the action if it's dependent. We do this now rather than before
+  // attempting any conversion so that we can still perform builtin conversions
+  // on dependent arguments. This matters for things like converting a
+  // `template T: SomeInterface` to `type`, where it's important to form a
+  // `FacetAccessType` when checking the template. But when running the action
+  // later, we need to try builtin conversions again, because one may apply that
+  // didn't apply in the template definition.
+  if (auto splice_inst_id =
+          AddConvertActionIfDependent(context, loc_id, expr_id, target);
+      splice_inst_id.has_value()) {
+    return splice_inst_id;
+  }
+
+  // If this is not a builtin conversion, try an `ImplicitAs` conversion.
+  expr_id = PerformUserDefinedConversion(context, loc_id, expr_id, target);
+
+  // Track that we performed a type conversion, if we did so.
+  if (original_inner_expr_id != expr_id) {
+    expr_id = AddInst<SemIR::Converted>(context, loc_id,
+                                        {.type_id = target.type_id,
+                                         .original_id = orig_expr_id,
+                                         .result_id = expr_id});
+  }
+
+  // Now perform any necessary value category conversions.
+  return PerformCategoryConversion(context, loc_id, expr_id, target);
+}
+
+static auto ConvertStep(ConversionStack& stack, SemIR::LocId loc_id,
+                        SemIR::InstId expr_id, ConversionTarget target)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto& sem_ir = context.sem_ir();
   auto orig_expr_id = expr_id;
 
@@ -2585,37 +2740,30 @@ auto Convert(Context& context, SemIR::LocId loc_id, SemIR::InstId expr_id,
                          loc_id);
 
   // Check whether any builtin conversion applies.
-  expr_id = PerformBuiltinConversion(context, loc_id, expr_id, target);
-  if (expr_id == SemIR::ErrorInst::InstId) {
-    return expr_id;
+  size_t base_depth = stack.depth();
+  auto builtin_result =
+      PerformBuiltinConversionStep(stack, loc_id, expr_id, target);
+  if (!builtin_result) {
+    stack.InsertAt(
+        base_depth,
+        [&context, loc_id, orig_expr_id, original_inner_expr_id,
+         target](SemIR::InstId expr_id) -> std::optional<SemIR::InstId> {
+          return FinishConvert(context, loc_id, orig_expr_id,
+                               original_inner_expr_id, expr_id, target);
+        });
+    return std::nullopt;
   }
+  return FinishConvert(context, loc_id, orig_expr_id, original_inner_expr_id,
+                       *builtin_result, target);
+}
 
-  // Defer the action if it's dependent. We do this now rather than before
-  // attempting any conversion so that we can still perform builtin conversions
-  // on dependent arguments. This matters for things like converting a
-  // `template T: SomeInterface` to `type`, where it's important to form a
-  // `FacetAccessType` when checking the template. But when running the action
-  // later, we need to try builtin conversions again, because one may apply that
-  // didn't apply in the template definition.
-  if (auto splice_inst_id =
-          AddConvertActionIfDependent(context, loc_id, expr_id, target);
-      splice_inst_id.has_value()) {
-    return splice_inst_id;
+auto Convert(Context& context, SemIR::LocId loc_id, SemIR::InstId expr_id,
+             ConversionTarget target) -> SemIR::InstId {
+  ConversionStack stack(context);
+  if (auto result = ConvertStep(stack, loc_id, expr_id, target)) {
+    return *result;
   }
-
-  // If this is not a builtin conversion, try an `ImplicitAs` conversion.
-  expr_id = PerformUserDefinedConversion(context, loc_id, expr_id, target);
-
-  // Track that we performed a type conversion, if we did so.
-  if (original_inner_expr_id != expr_id) {
-    expr_id = AddInst<SemIR::Converted>(context, loc_id,
-                                        {.type_id = target.type_id,
-                                         .original_id = orig_expr_id,
-                                         .result_id = expr_id});
-  }
-
-  // Now perform any necessary value category conversions.
-  return PerformCategoryConversion(context, loc_id, expr_id, target);
+  return stack.Run();
 }
 
 auto InitializeExisting(Context& context, SemIR::LocId loc_id,
