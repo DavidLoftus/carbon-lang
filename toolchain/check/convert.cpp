@@ -1295,49 +1295,68 @@ static auto ComputeInheritancePath(Context& context, SemIR::LocId loc_id,
 
 // Performs a conversion from a derived class value or reference to a base class
 // value or reference.
-static auto ConvertDerivedToBase(Context& context, SemIR::LocId loc_id,
-                                 SemIR::InstId value_id,
-                                 const InheritancePath& path) -> SemIR::InstId {
+static auto ConvertDerivedToBase(ConversionStack& stack, SemIR::LocId loc_id,
+                                 SemIR::InstId value_id, InheritancePath path)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   // Materialize a temporary if necessary.
-  value_id = ConvertToValueOrRefExpr(context, value_id);
+  stack.Push([&context, loc_id, path = std::move(path)](
+                 SemIR::InstId value_id) -> std::optional<SemIR::InstId> {
+    // Preserve type qualifiers.
+    auto quals = context.types()
+                     .GetUnqualifiedTypeAndQualifiers(
+                         context.insts().Get(value_id).type_id())
+                     .second;
 
-  // Preserve type qualifiers.
-  auto quals = context.types()
-                   .GetUnqualifiedTypeAndQualifiers(
-                       context.insts().Get(value_id).type_id())
-                   .second;
-
-  // Add a series of `.base` accesses.
-  for (auto [_, base_id, base_type_id] : path) {
-    auto base_decl = context.insts().GetAs<SemIR::BaseDecl>(base_id);
-    value_id = AddInst<SemIR::ClassElementAccess>(
-        context, loc_id,
-        {.type_id = GetQualifiedType(context, base_type_id, quals),
-         .base_id = value_id,
-         .index = base_decl.index});
-  }
-  return value_id;
+    // Add a series of `.base` accesses.
+    for (auto [_, base_id, base_type_id] : path) {
+      auto base_decl = context.insts().GetAs<SemIR::BaseDecl>(base_id);
+      value_id = AddInst<SemIR::ClassElementAccess>(
+          context, loc_id,
+          {.type_id = GetQualifiedType(context, base_type_id, quals),
+           .base_id = value_id,
+           .index = base_decl.index});
+    }
+    return value_id;
+  });
+  stack.PushConvert(SemIR::LocId(value_id), value_id,
+                    {.kind = ConversionTarget::ValueOrRef,
+                     .type_id = context.insts().Get(value_id).type_id()});
+  return std::nullopt;
 }
 
 // Performs a conversion from a derived class pointer to a base class pointer.
-static auto ConvertDerivedPointerToBasePointer(
-    Context& context, SemIR::LocId loc_id, SemIR::PointerType src_ptr_type,
-    SemIR::TypeId dest_ptr_type_id, SemIR::InstId ptr_id,
-    const InheritancePath& path) -> SemIR::InstId {
+static auto ConvertDerivedPointerToBasePointer(ConversionStack& stack,
+                                               SemIR::LocId loc_id,
+                                               SemIR::PointerType src_ptr_type,
+                                               SemIR::TypeId dest_ptr_type_id,
+                                               SemIR::InstId ptr_id,
+                                               InheritancePath path)
+    -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   auto pointee_type_id =
       context.types().GetTypeIdForTypeInstId(src_ptr_type.pointee_id);
 
   // Form `*p`.
-  ptr_id = ConvertToValueExpr(context, ptr_id);
-  auto ref_id = AddInst<SemIR::Deref>(
-      context, loc_id, {.type_id = pointee_type_id, .pointer_id = ptr_id});
+  stack.Push([&stack, loc_id, pointee_type_id, dest_ptr_type_id,
+              path = std::move(path)](
+                 SemIR::InstId ptr_id) mutable -> std::optional<SemIR::InstId> {
+    auto& context = stack.context();
+    auto ref_id = AddInst<SemIR::Deref>(
+        context, loc_id, {.type_id = pointee_type_id, .pointer_id = ptr_id});
 
-  // Convert as a reference expression.
-  ref_id = ConvertDerivedToBase(context, loc_id, ref_id, path);
-
-  // Take the address.
-  return AddInst<SemIR::AddrOf>(
-      context, loc_id, {.type_id = dest_ptr_type_id, .lvalue_id = ref_id});
+    // Convert as a reference expression, then take the address.
+    stack.Push([&context, loc_id, dest_ptr_type_id](
+                   SemIR::InstId ref_id) -> std::optional<SemIR::InstId> {
+      return AddInst<SemIR::AddrOf>(
+          context, loc_id, {.type_id = dest_ptr_type_id, .lvalue_id = ref_id});
+    });
+    return ConvertDerivedToBase(stack, loc_id, ref_id, std::move(path));
+  });
+  stack.PushConvert(SemIR::LocId(ptr_id), ptr_id,
+                    {.kind = ConversionTarget::Value,
+                     .type_id = context.insts().Get(ptr_id).type_id()});
+  return std::nullopt;
 }
 
 // Returns whether `category` is a valid expression category to produce as a
@@ -1640,10 +1659,11 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
       auto removed_quals = value_quals & ~target_quals;
       if (CanAddQualifiers(added_quals, category) &&
           CanRemoveQualifiers(removed_quals, category, target.kind)) {
-        auto finish =
-            [&context, loc_id, value_type_id, target, category, removed_quals,
-             inheritance_path = std::move(inheritance_path)](
-                SemIR::InstId value_id) -> std::optional<SemIR::InstId> {
+        auto finish = [&stack, &context, loc_id, value_type_id, target,
+                       category, removed_quals,
+                       inheritance_path = std::move(inheritance_path)](
+                          SemIR::InstId value_id) mutable
+            -> std::optional<SemIR::InstId> {
           // `MaybeUnformed(T)` might have a pointer value representation when
           // `T` does not, so convert as needed when removing `MaybeUnformed`.
           bool need_value_binding = false;
@@ -1678,29 +1698,36 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
             }
           }
 
+          auto finish_qualifiers =
+              [&context, loc_id, target, need_value_binding](
+                  SemIR::InstId value_id) -> std::optional<SemIR::InstId> {
+            // Next, switch out the qualifiers for those of the target.
+            if (context.insts().Get(value_id).type_id() != target.type_id) {
+              value_id = AddInst<SemIR::AsCompatible>(
+                  context, loc_id,
+                  {.type_id = target.type_id, .source_id = value_id});
+            }
+
+            // Finally, add a value acquisition to get back to a value
+            // expression if we temporarily converted to a reference earlier.
+            if (need_value_binding) {
+              value_id = AddInst<SemIR::AcquireValue>(
+                  context, loc_id,
+                  {.type_id = target.type_id, .value_id = value_id});
+            }
+
+            return value_id;
+          };
+
           // An expression of type T converts to U if T is a class derived from
           // U. First navigate to the base subobject. This preserves qualifiers.
           if (inheritance_path) {
-            value_id = ConvertDerivedToBase(context, loc_id, value_id,
-                                            *inheritance_path);
+            stack.Push(std::move(finish_qualifiers));
+            return ConvertDerivedToBase(stack, loc_id, value_id,
+                                        std::move(*inheritance_path));
           }
 
-          // Next, switch out the qualifiers for those of the target.
-          if (context.insts().Get(value_id).type_id() != target.type_id) {
-            value_id = AddInst<SemIR::AsCompatible>(
-                context, loc_id,
-                {.type_id = target.type_id, .source_id = value_id});
-          }
-
-          // Finally, add a value acquisition to get back to a value expression
-          // if we temporarily converted to a reference earlier.
-          if (need_value_binding) {
-            value_id = AddInst<SemIR::AcquireValue>(
-                context, loc_id,
-                {.type_id = target.type_id, .value_id = value_id});
-          }
-
-          return value_id;
+          return finish_qualifiers(value_id);
         };
 
         // For a struct or tuple literal, perform a category conversion if
@@ -1834,9 +1861,19 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
                                                unqual_src_pointee_type_id,
                                                unqual_target_pointee_type_id);
             path && !path->empty()) {
-          value_id = ConvertDerivedPointerToBasePointer(
-              context, loc_id, *src_pointer_type, target.type_id, value_id,
-              *path);
+          // Perform a compatible conversion to add any new qualifiers.
+          if (src_quals != target_quals) {
+            stack.Push(
+                [&context, loc_id, target_type_id = target.type_id](
+                    SemIR::InstId value_id) -> std::optional<SemIR::InstId> {
+                  return AddInst<SemIR::AsCompatible>(
+                      context, loc_id,
+                      {.type_id = target_type_id, .source_id = value_id});
+                });
+          }
+          return ConvertDerivedPointerToBasePointer(
+              stack, loc_id, *src_pointer_type, target.type_id, value_id,
+              std::move(*path));
         } else {
           // No conversion was possible.
           return value_id;
