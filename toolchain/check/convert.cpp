@@ -497,22 +497,6 @@ static auto PushConvertAggregateElement(
   stack.PushConvert(loc_id, src_elem_id, target);
 }
 
-template <typename SourceAccessInstT, typename TargetAccessInstT>
-static auto ConvertAggregateElement(
-    Context& context, SemIR::LocId loc_id, SemIR::InstId src_id,
-    SemIR::TypeInstId src_elem_type_inst, const LiteralElements& src_literal,
-    ConversionTarget::Kind kind, SemIR::InstId target_id,
-    SemIR::TypeInstId target_elem_type_inst, PendingBlock* target_block,
-    llvm::MutableArrayRef<SemIR::InstId> template_storage_args,
-    size_t src_field_index, size_t target_field_index) -> SemIR::InstId {
-  ConversionStack stack(context);
-  PushConvertAggregateElement<SourceAccessInstT, TargetAccessInstT>(
-      stack, loc_id, src_id, src_elem_type_inst, src_literal, kind, target_id,
-      target_elem_type_inst, target_block, template_storage_args,
-      src_field_index, target_field_index);
-  return stack.Run();
-}
-
 namespace {
 struct TupleToArrayState {
   TupleToArrayState(Context& context, SemIR::LocId value_loc_id,
@@ -999,18 +983,265 @@ static auto ConvertPartialInitializerToNonPartial(
                                      .update_init_id = vptr_init_id});
 }
 
-// Common implementation for ConvertStructToStruct and ConvertStructToClass.
+namespace {
 template <typename TargetAccessInstT, typename GetDefault>
-static auto ConvertStructToStructOrClass(
-    Context& context, SemIR::LocId loc_id, SemIR::StructType src_type,
-    SemIR::StructType dest_type, SemIR::InstId value_id,
-    ConversionTarget target, GetDefault get_default,
-    SemIR::ClassType* vtable_class_type = nullptr) -> SemIR::InstId {
-  static_assert(std::is_same_v<SemIR::ClassElementAccess, TargetAccessInstT> ||
-                std::is_same_v<SemIR::StructAccess, TargetAccessInstT>);
+struct StructToStructOrClassState {
+  StructToStructOrClassState(
+      SemIR::File& sem_ir, SemIR::LocId value_loc_id, SemIR::InstId value_id,
+      SemIR::StructType src_type, SemIR::StructType dest_type,
+      LiteralElements literal, ConversionTarget target,
+      ConversionTarget::Kind inner_kind, SemIR::ElementIndex dest_vptr_index,
+      Map<SemIR::NameId, int32_t> src_field_indexes,
+      size_t dest_elem_fields_size, size_t dest_elem_fields_count,
+      GetDefault get_default, std::optional<SemIR::ClassType> vtable_class_type,
+      std::unique_ptr<PendingBlock> owned_target_block)
+      : value_loc_id(value_loc_id),
+        value_id(value_id),
+        src_type(src_type),
+        dest_type(dest_type),
+        literal(literal),
+        target(target),
+        inner_kind(inner_kind),
+        dest_vptr_index(dest_vptr_index),
+        src_field_indexes(std::move(src_field_indexes)),
+        new_block((literal.has_value() && !dest_vptr_index.has_value() &&
+                   sem_ir.inst_blocks().Get(literal.elems_id).size() ==
+                       dest_elem_fields_size)
+                      ? SemIR::CopyOnWriteInstBlock(&sem_ir, literal.elems_id)
+                      : SemIR::CopyOnWriteInstBlock(
+                            &sem_ir,
+                            SemIR::CopyOnWriteInstBlock::UninitializedBlock{
+                                dest_elem_fields_count})),
+        get_default(std::move(get_default)),
+        vtable_class_type(vtable_class_type),
+        owned_target_block(std::move(owned_target_block)) {}
+
+  SemIR::LocId value_loc_id;
+  SemIR::InstId value_id;
+  SemIR::StructType src_type;
+  SemIR::StructType dest_type;
+  LiteralElements literal;
+  ConversionTarget target;
+  ConversionTarget::Kind inner_kind;
+  SemIR::ElementIndex dest_vptr_index;
+  Map<SemIR::NameId, int32_t> src_field_indexes;
+  SemIR::CopyOnWriteInstBlock new_block;
+  GetDefault get_default;
+  std::optional<SemIR::ClassType> vtable_class_type;
+  std::unique_ptr<PendingBlock> owned_target_block;
+  size_t index = 0;
+  SemIR::TypeInstId pending_dest_field_type_inst_id = SemIR::TypeInstId::None;
+};
+}  // namespace
+
+template <typename TargetAccessInstT, typename GetDefault>
+static auto StepStructToStructOrClass(
+    ConversionStack& stack,
+    std::unique_ptr<StructToStructOrClassState<TargetAccessInstT, GetDefault>>
+        state,
+    SemIR::InstId init_id) -> std::optional<SemIR::InstId> {
   constexpr bool ToClass =
       std::is_same_v<SemIR::ClassElementAccess, TargetAccessInstT>;
 
+  auto& context = stack.context();
+  auto& sem_ir = context.sem_ir();
+  auto src_elem_fields =
+      sem_ir.struct_type_fields().Get(state->src_type.fields_id);
+  auto dest_elem_fields =
+      sem_ir.struct_type_fields().Get(state->dest_type.fields_id);
+
+  auto finish_field = [&](size_t i, SemIR::StructTypeField dest_field,
+                          SemIR::TypeInstId dest_field_type_inst_id,
+                          SemIR::InstId field_init_id) -> bool {
+    if (field_init_id == SemIR::ErrorInst::InstId) {
+      return false;
+    }
+
+    if (!field_init_id.has_value()) {
+      if (state->target.diagnose) {
+        if (state->literal.elems_id.has_value()) {
+          CARBON_DIAGNOSTIC(
+              StructInitMissingFieldInLiteral, Error,
+              "missing value for field `{0}` in struct initialization",
+              SemIR::NameId);
+          context.emitter().Emit(state->value_loc_id,
+                                 StructInitMissingFieldInLiteral,
+                                 dest_field.name_id);
+        } else {
+          CARBON_DIAGNOSTIC(StructInitMissingFieldInConversion, Error,
+                            "cannot convert from struct type {0} to {1}: "
+                            "missing field `{2}` in source type",
+                            TypeOfInstId, SemIR::TypeId, SemIR::NameId);
+          context.emitter().Emit(
+              state->value_loc_id, StructInitMissingFieldInConversion,
+              state->value_id, state->target.type_id, dest_field.name_id);
+        }
+      }
+      return false;
+    }
+
+    // When initializing the base, adjust the type of the initializer from
+    // `partial Base` to `Base`. This isn't strictly correct, since we haven't
+    // finished initializing a `Base` until we store to the vptr, but is better
+    // than having an inconsistent type for the struct field initializer.
+    if (dest_field_type_inst_id != dest_field.type_inst_id) {
+      field_init_id = AddInst<SemIR::AsCompatible>(
+          context, state->value_loc_id,
+          {.type_id =
+               context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id),
+           .source_id = field_init_id});
+    }
+
+    state->new_block.Set(i, field_init_id);
+    return true;
+  };
+
+  if (state->pending_dest_field_type_inst_id.has_value()) {
+    auto i = state->index - 1;
+    auto dest_field_type_inst_id = std::exchange(
+        state->pending_dest_field_type_inst_id, SemIR::TypeInstId::None);
+    if (!finish_field(i, dest_elem_fields[i], dest_field_type_inst_id,
+                      init_id)) {
+      return SemIR::ErrorInst::InstId;
+    }
+  }
+
+  while (state->index < dest_elem_fields.size()) {
+    auto i = state->index++;
+    auto dest_field = dest_elem_fields[i];
+
+    if (dest_field.name_id == SemIR::NameId::Vptr) {
+      if constexpr (!ToClass) {
+        CARBON_FATAL("Only classes should have vptrs.");
+      }
+      state->target.storage_access_block->InsertHere();
+      auto vptr_type_id =
+          context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id);
+      auto dest_id = AddInst<SemIR::ClassElementAccess>(
+          context, state->value_loc_id,
+          {.type_id = vptr_type_id,
+           .base_id = state->target.storage_id,
+           .index = SemIR::ElementIndex(i)});
+      auto vtable_ptr_id = SemIR::InstId::None;
+      if (state->vtable_class_type) {
+        vtable_ptr_id = CreateVtablePtrRef(context, state->value_loc_id,
+                                           *state->vtable_class_type);
+        // Track that we initialized the vptr so we don't do it again.
+        state->vtable_class_type = std::nullopt;
+      } else {
+        // For a partial class type, we leave the vtable pointer uninitialized.
+        // TODO: Consider storing a specified value such as null for hardening.
+        vtable_ptr_id = AddInst<SemIR::UninitializedValue>(
+            context, state->value_loc_id,
+            {.type_id =
+                 GetPointerType(context, SemIR::VtableType::TypeInstId)});
+      }
+      auto vptr_init_id =
+          AddInst<SemIR::InPlaceInit>(context, state->value_loc_id,
+                                      {.type_id = vptr_type_id,
+                                       .src_id = vtable_ptr_id,
+                                       .dest_id = dest_id});
+      state->new_block.Set(i, vptr_init_id);
+      continue;
+    }
+
+    // Find the matching source field.
+    auto src_field_index = i;
+    bool found = true;
+    if (state->src_type.fields_id != state->dest_type.fields_id) {
+      if (auto lookup = state->src_field_indexes.Lookup(dest_field.name_id)) {
+        src_field_index = lookup.value();
+      } else {
+        found = false;
+      }
+    }
+
+    // When initializing the `.base` field of a class, the destination type is
+    // `partial Base`, not `Base`.
+    // TODO: Skip this if the source field is an initializing expression of the
+    // non-partial type in order to produce smaller IR.
+    auto dest_field_type_inst_id = dest_field.type_inst_id;
+    if (dest_field.name_id == SemIR::NameId::Base) {
+      auto partial_type_id = GetQualifiedType(
+          context,
+          context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id),
+          SemIR::TypeQualifiers::Partial);
+      dest_field_type_inst_id = context.types().GetTypeInstId(partial_type_id);
+    }
+
+    if (found) {
+      auto src_field = src_elem_fields[src_field_index];
+
+      auto dest_field_index = src_field_index;
+      if (state->dest_vptr_index.has_value() &&
+          static_cast<int32_t>(src_field_index) >=
+              state->dest_vptr_index.index) {
+        dest_field_index += 1;
+      }
+      state->pending_dest_field_type_inst_id = dest_field_type_inst_id;
+      auto* s = state.get();
+      stack.Push([&stack, state = std::move(state)](
+                     SemIR::InstId field_init_id) mutable {
+        return StepStructToStructOrClass<TargetAccessInstT, GetDefault>(
+            stack, std::move(state), field_init_id);
+      });
+      PushConvertAggregateElement<SemIR::StructAccess, TargetAccessInstT>(
+          stack, s->value_loc_id, s->value_id, src_field.type_inst_id,
+          s->literal, s->inner_kind, s->target.storage_id,
+          dest_field_type_inst_id, s->target.storage_access_block,
+          s->target.template_storage_args, src_field_index, dest_field_index);
+      return std::nullopt;
+    }
+
+    auto default_init_id = state->get_default(dest_field.name_id);
+    if (!finish_field(i, dest_field, dest_field_type_inst_id,
+                      default_init_id)) {
+      return SemIR::ErrorInst::InstId;
+    }
+  }
+
+  bool is_init = state->target.is_initializer();
+  if (ToClass) {
+    state->target.storage_access_block->InsertHere();
+    CARBON_CHECK(is_init,
+                 "Converting directly to a class value is not supported");
+    auto result_id =
+        AddInst<SemIR::ClassInit>(context, state->value_loc_id,
+                                  {.type_id = state->target.type_id,
+                                   .elements_id = state->new_block.id(),
+                                   .dest_id = state->target.storage_id});
+    if (state->vtable_class_type) {
+      result_id = ConvertPartialInitializerToNonPartial(
+          context, state->value_loc_id, state->target,
+          *state->vtable_class_type, result_id);
+    }
+    return result_id;
+  } else if (is_init) {
+    state->target.storage_access_block->InsertHere();
+    return AddInst<SemIR::StructInit>(context, state->value_loc_id,
+                                      {.type_id = state->target.type_id,
+                                       .elements_id = state->new_block.id(),
+                                       .dest_id = state->target.storage_id});
+  } else {
+    return AddInst<SemIR::StructValue>(context, state->value_loc_id,
+                                       {.type_id = state->target.type_id,
+                                        .elements_id = state->new_block.id()});
+  }
+}
+
+// Common implementation for ConvertStructToStruct and ConvertStructToClass.
+template <typename TargetAccessInstT, typename GetDefault>
+static auto ConvertStructToStructOrClass(
+    ConversionStack& stack, SemIR::LocId loc_id, SemIR::StructType src_type,
+    SemIR::StructType dest_type, SemIR::InstId value_id,
+    ConversionTarget target, GetDefault get_default,
+    std::optional<SemIR::ClassType> vtable_class_type = std::nullopt,
+    std::unique_ptr<PendingBlock> owned_target_block = nullptr)
+    -> std::optional<SemIR::InstId> {
+  static_assert(std::is_same_v<SemIR::ClassElementAccess, TargetAccessInstT> ||
+                std::is_same_v<SemIR::StructAccess, TargetAccessInstT>);
+
+  auto& context = stack.context();
   auto& sem_ir = context.sem_ir();
   auto src_elem_fields = sem_ir.struct_type_fields().Get(src_type.fields_id);
   auto dest_elem_fields = sem_ir.struct_type_fields().Get(dest_type.fields_id);
@@ -1072,187 +1303,42 @@ static auto ConvertStructToStructOrClass(
   // Initialize each element of the destination from the corresponding element
   // of the source.
   // TODO: Annotate diagnostics coming from here with the element index.
-  auto new_block =
-      (literal.has_value() && !dest_vptr_index.has_value() &&
-       context.inst_blocks().Get(literal.elems_id).size() ==
-           dest_elem_fields_size)
-          ? SemIR::CopyOnWriteInstBlock(&sem_ir, literal.elems_id)
-          : SemIR::CopyOnWriteInstBlock(
-                &sem_ir, SemIR::CopyOnWriteInstBlock::UninitializedBlock{
-                             dest_elem_fields.size()});
-  for (auto [i, dest_field] : llvm::enumerate(dest_elem_fields)) {
-    if (dest_field.name_id == SemIR::NameId::Vptr) {
-      if constexpr (!ToClass) {
-        CARBON_FATAL("Only classes should have vptrs.");
-      }
-      target.storage_access_block->InsertHere();
-      auto vptr_type_id =
-          context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id);
-      auto dest_id =
-          AddInst<SemIR::ClassElementAccess>(context, value_loc_id,
-                                             {.type_id = vptr_type_id,
-                                              .base_id = target.storage_id,
-                                              .index = SemIR::ElementIndex(i)});
-      auto vtable_ptr_id = SemIR::InstId::None;
-      if (vtable_class_type) {
-        vtable_ptr_id =
-            CreateVtablePtrRef(context, value_loc_id, *vtable_class_type);
-        // Track that we initialized the vptr so we don't do it again.
-        vtable_class_type = nullptr;
-      } else {
-        // For a partial class type, we leave the vtable pointer uninitialized.
-        // TODO: Consider storing a specified value such as null for hardening.
-        vtable_ptr_id = AddInst<SemIR::UninitializedValue>(
-            context, value_loc_id,
-            {.type_id =
-                 GetPointerType(context, SemIR::VtableType::TypeInstId)});
-      }
-      auto init_id = AddInst<SemIR::InPlaceInit>(context, value_loc_id,
-                                                 {.type_id = vptr_type_id,
-                                                  .src_id = vtable_ptr_id,
-                                                  .dest_id = dest_id});
-      new_block.Set(i, init_id);
-      continue;
-    }
-
-    // Find the matching source field.
-    auto src_field_index = i;
-    bool found = true;
-    if (src_type.fields_id != dest_type.fields_id) {
-      if (auto lookup = src_field_indexes.Lookup(dest_field.name_id)) {
-        src_field_index = lookup.value();
-      } else {
-        found = false;
-      }
-    }
-
-    // When initializing the `.base` field of a class, the destination type is
-    // `partial Base`, not `Base`.
-    // TODO: Skip this if the source field is an initializing expression of the
-    // non-partial type in order to produce smaller IR.
-    auto dest_field_type_inst_id = dest_field.type_inst_id;
-    if (dest_field.name_id == SemIR::NameId::Base) {
-      auto partial_type_id = GetQualifiedType(
-          context,
-          context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id),
-          SemIR::TypeQualifiers::Partial);
-      dest_field_type_inst_id = context.types().GetTypeInstId(partial_type_id);
-    }
-
-    SemIR::InstId init_id = SemIR::InstId::None;
-    if (found) {
-      auto src_field = src_elem_fields[src_field_index];
-
-      // TODO: This call recurses back into conversion. Switch to an iterative
-      // approach.
-      auto dest_field_index = src_field_index;
-      if (dest_vptr_index.has_value() &&
-          static_cast<int32_t>(src_field_index) >= dest_vptr_index.index) {
-        dest_field_index += 1;
-      }
-      init_id = ConvertAggregateElement<SemIR::StructAccess, TargetAccessInstT>(
-          context, value_loc_id, value_id, src_field.type_inst_id, literal,
-          inner_kind, target.storage_id, dest_field_type_inst_id,
-          target.storage_access_block, target.template_storage_args,
-          src_field_index, dest_field_index);
-    } else {
-      init_id = get_default(dest_field.name_id);
-    }
-
-    if (init_id == SemIR::ErrorInst::InstId) {
-      return SemIR::ErrorInst::InstId;
-    }
-
-    if (!init_id.has_value()) {
-      if (target.diagnose) {
-        if (literal.elems_id.has_value()) {
-          CARBON_DIAGNOSTIC(
-              StructInitMissingFieldInLiteral, Error,
-              "missing value for field `{0}` in struct initialization",
-              SemIR::NameId);
-          context.emitter().Emit(value_loc_id, StructInitMissingFieldInLiteral,
-                                 dest_field.name_id);
-        } else {
-          CARBON_DIAGNOSTIC(StructInitMissingFieldInConversion, Error,
-                            "cannot convert from struct type {0} to {1}: "
-                            "missing field `{2}` in source type",
-                            TypeOfInstId, SemIR::TypeId, SemIR::NameId);
-          context.emitter().Emit(value_loc_id,
-                                 StructInitMissingFieldInConversion, value_id,
-                                 target.type_id, dest_field.name_id);
-        }
-      }
-      return SemIR::ErrorInst::InstId;
-    }
-
-    // When initializing the base, adjust the type of the initializer from
-    // `partial Base` to `Base`. This isn't strictly correct, since we haven't
-    // finished initializing a `Base` until we store to the vptr, but is better
-    // than having an inconsistent type for the struct field initializer.
-    if (dest_field_type_inst_id != dest_field.type_inst_id) {
-      init_id = AddInst<SemIR::AsCompatible>(
-          context, value_loc_id,
-          {.type_id =
-               context.types().GetTypeIdForTypeInstId(dest_field.type_inst_id),
-           .source_id = init_id});
-    }
-
-    new_block.Set(i, init_id);
-  }
-
-  bool is_init = target.is_initializer();
-  if (ToClass) {
-    target.storage_access_block->InsertHere();
-    CARBON_CHECK(is_init,
-                 "Converting directly to a class value is not supported");
-    auto result_id = AddInst<SemIR::ClassInit>(context, value_loc_id,
-                                               {.type_id = target.type_id,
-                                                .elements_id = new_block.id(),
-                                                .dest_id = target.storage_id});
-    if (vtable_class_type) {
-      result_id = ConvertPartialInitializerToNonPartial(
-          context, value_loc_id, target, *vtable_class_type, result_id);
-    }
-    return result_id;
-  } else if (is_init) {
-    target.storage_access_block->InsertHere();
-    return AddInst<SemIR::StructInit>(context, value_loc_id,
-                                      {.type_id = target.type_id,
-                                       .elements_id = new_block.id(),
-                                       .dest_id = target.storage_id});
-  } else {
-    return AddInst<SemIR::StructValue>(
-        context, value_loc_id,
-        {.type_id = target.type_id, .elements_id = new_block.id()});
-  }
+  auto state = std::make_unique<
+      StructToStructOrClassState<TargetAccessInstT, GetDefault>>(
+      sem_ir, value_loc_id, value_id, src_type, dest_type, literal, target,
+      inner_kind, dest_vptr_index, std::move(src_field_indexes),
+      dest_elem_fields_size, dest_elem_fields.size(), std::move(get_default),
+      vtable_class_type, std::move(owned_target_block));
+  return StepStructToStructOrClass<TargetAccessInstT, GetDefault>(
+      stack, std::move(state), SemIR::InstId::None);
 }
 
 // Performs a conversion from a struct to a struct type. This function only
 // converts the type, and does not perform a final conversion to the requested
 // expression category.
-static auto ConvertStructToStruct(Context& context, SemIR::LocId loc_id,
+static auto ConvertStructToStruct(ConversionStack& stack, SemIR::LocId loc_id,
                                   SemIR::StructType src_type,
                                   SemIR::StructType dest_type,
                                   SemIR::InstId value_id,
-                                  ConversionTarget target) -> SemIR::InstId {
+                                  ConversionTarget target)
+    -> std::optional<SemIR::InstId> {
   return ConvertStructToStructOrClass<SemIR::StructAccess>(
-      context, loc_id, src_type, dest_type, value_id, target,
+      stack, loc_id, src_type, dest_type, value_id, target,
       /*get_default=*/[](SemIR::NameId) { return SemIR::InstId::None; });
 }
 
 // Performs a conversion from a struct to a class type. This function only
 // converts the type, and does not perform a final conversion to the requested
 // expression category.
-static auto ConvertStructToClass(Context& context, SemIR::LocId loc_id,
-                                 SemIR::StructType src_type,
-                                 SemIR::ClassType dest_type,
-                                 SemIR::InstId value_id,
-                                 ConversionTarget target,
-                                 bool is_partial = false) -> SemIR::InstId {
+static auto ConvertStructToClass(
+    ConversionStack& stack, SemIR::LocId loc_id, SemIR::StructType src_type,
+    SemIR::ClassType dest_type, SemIR::InstId value_id, ConversionTarget target,
+    bool is_partial = false) -> std::optional<SemIR::InstId> {
+  auto& context = stack.context();
   CARBON_CHECK(target.kind != ConversionTarget::InPlaceInitializing ||
                target.storage_id.has_value());
   auto value_loc_id = GetInstLocationOrFallback(context, value_id, loc_id);
-  PendingBlock target_block(&context);
+  std::unique_ptr<PendingBlock> owned_target_block;
   auto& dest_class_info = context.classes().Get(dest_type.class_id);
   if (!is_partial &&
       dest_class_info.inheritance_kind == SemIR::Class::Abstract) {
@@ -1275,22 +1361,27 @@ static auto ConvertStructToClass(Context& context, SemIR::LocId loc_id,
   // If we're trying to create a class value, form temporary storage to hold the
   // initializer.
   if (!target.is_initializer()) {
+    owned_target_block = std::make_unique<PendingBlock>(&context);
     target.kind = ConversionTarget::Initializing;
-    target.storage_access_block = &target_block;
-    target.storage_id = target_block.AddInst<SemIR::TemporaryStorage>(
+    target.storage_access_block = owned_target_block.get();
+    target.storage_id = owned_target_block->AddInst<SemIR::TemporaryStorage>(
         value_loc_id, {.type_id = target.type_id});
   }
 
-  const auto& dest_class_scope =
-      context.name_scopes().Get(dest_class_info.scope_id);
+  auto dest_class_scope_id = dest_class_info.scope_id;
 
   // Provide the default value for a field. Returns `InstId::None` if no
   // default is available, or `ErrorInst::InstId` if a diagnosed error
   // occurs.
-  auto get_default = [&](SemIR::NameId name_id) {
+  auto get_default = [&context, value_id, dest_class_scope_id,
+                      dest_specific_id =
+                          dest_type.specific_id](SemIR::NameId name_id) {
     if (!context.insts().Is<SemIR::StructLiteral>(value_id)) {
       return SemIR::InstId::None;
     }
+
+    const auto& dest_class_scope =
+        context.name_scopes().Get(dest_class_scope_id);
 
     // Look up the field name in the class to get the corresponding
     // `FieldDecl` `InstId`.
@@ -1314,8 +1405,8 @@ static auto ConvertStructToClass(Context& context, SemIR::LocId loc_id,
       return SemIR::InstId::None;
     }
     SemIR::ConstantId const_id = SemIR::ConstantId::NotConstant;
-    const_id = GetConstantValueInSpecific(
-        context.sem_ir(), dest_type.specific_id, field.initializer_id);
+    const_id = GetConstantValueInSpecific(context.sem_ir(), dest_specific_id,
+                                          field.initializer_id);
     if (const_id == SemIR::ConstantId::NotConstant) {
       context.TODO(field.initializer_id, "field initializer is not constant");
       return SemIR::ErrorInst::InstId;
@@ -1325,8 +1416,10 @@ static auto ConvertStructToClass(Context& context, SemIR::LocId loc_id,
   };
 
   return ConvertStructToStructOrClass<SemIR::ClassElementAccess>(
-      context, loc_id, src_type, dest_struct_type, value_id, target,
-      get_default, is_partial ? nullptr : &dest_type);
+      stack, loc_id, src_type, dest_struct_type, value_id, target,
+      std::move(get_default),
+      is_partial ? std::nullopt : std::optional(dest_type),
+      std::move(owned_target_block));
 }
 
 // Represents an edge in the inheritance graph, created by a `base` declaration.
@@ -1886,7 +1979,7 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
   if (auto target_struct_type = target_type_inst.TryAs<SemIR::StructType>()) {
     if (auto src_struct_type =
             sem_ir.types().TryGetAs<SemIR::StructType>(value_type_id)) {
-      return ConvertStructToStruct(context, loc_id, *src_struct_type,
+      return ConvertStructToStruct(stack, loc_id, *src_struct_type,
                                    *target_struct_type, value_id, target);
     }
   }
@@ -1940,7 +2033,7 @@ static auto PerformBuiltinConversionStep(ConversionStack& stack,
                .Get(target_class_type->class_id)
                .adapt_id.has_value()) {
         return ConvertStructToClass(
-            context, loc_id, *src_struct_type, *target_class_type, value_id,
+            stack, loc_id, *src_struct_type, *target_class_type, value_id,
             target, target_quals.HasAnyOf(SemIR::TypeQualifiers::Partial));
       }
     }
